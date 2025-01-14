@@ -1,0 +1,47 @@
+# .cz.yaml
+
+commitizen:
+  name: cz_customize
+  customize:
+    message_template: |
+      {{type}}: {{title}} {% if issue %}(#{{issue}}) {% endif %}
+
+      {{message}}
+
+    questions:
+    - choices:
+      - name: '✨  feat:      새로운 기능'
+        value: ✨ feat
+      - name: '🐛  fix:       버그 수정'
+        value: 🐛 fix
+      - name: '📚  docs:      문서 수정'
+        value: 📚 docs
+      - name: '♻️  refactor:   코드 리팩토링'
+        value: ♻️ refactor
+      - name: '✅  test:      테스트 코드'
+        value: ✅ test
+      - name: '⚡️  perf:      성능 개선'
+        value: ⚡️ perf
+      - name: '🎉  init:      프로젝트 생성'
+        value: 🎉 init
+      message: '1️⃣  커밋 유형을 선택하세요:'
+      name: type
+      type: list
+
+    - message: '2️⃣  커밋 제목을 입력하세요:'
+      name: title
+      type: input
+
+    - message: '3️⃣  커밋 내용을 입력하세요:'
+      name: message
+      type: input
+      multiline: True
+
+    - message: '4️⃣  이슈 번호를 입력하세요:'
+      name: issue
+      type: input
+    
+    - message: '☑️  커밋 하려면 enter / 취소하려면 ctrl+c를 눌러주세요.'
+      name: commit
+      type: text
+      
