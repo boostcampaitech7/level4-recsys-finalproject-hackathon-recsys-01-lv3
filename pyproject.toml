@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "hackathon"
+version = "0.1.0"
+description = ""
+authors = ["geonwook"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+ipykernel = "^6.29.5"
+jupyter = "^1.1.1"
+polars = "^1.19.0"
+pandas = "^2.2.3"
+
+
+[tool.poetry.group.dev.dependencies]
+commitizen = "^4.1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
