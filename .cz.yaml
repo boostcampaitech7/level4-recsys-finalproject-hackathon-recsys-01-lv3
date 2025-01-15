@@ -9,6 +9,10 @@ commitizen:
       {{message}}
 
     questions:
+    - message: '❗ git config 설정하셨나요? (Enter/Ctrl+c)'
+      name: git
+      type: text
+
     - choices:
       - name: '✨  feat:      새로운 기능'
         value: ✨ feat
@@ -28,7 +32,7 @@ commitizen:
       name: type
       type: list
 
-    - message: '2️⃣  커밋 제목을 입력하세요:'
+    - message: '2️⃣  커밋 제목을 입력하세요: (소문자로 시작)'
       name: title
       type: input
 
@@ -37,11 +41,11 @@ commitizen:
       type: input
       multiline: True
 
-    - message: '4️⃣  이슈 번호를 입력하세요:'
+    - message: '4️⃣  이슈 번호를 입력하세요 : (숫자/Enter)'
       name: issue
       type: input
     
-    - message: '☑️  커밋 하려면 enter / 취소하려면 ctrl+c를 눌러주세요.'
+    - message: '☑️  커밋할까요? (Enter/Ctrl+c)'
       name: commit
       type: text
       
