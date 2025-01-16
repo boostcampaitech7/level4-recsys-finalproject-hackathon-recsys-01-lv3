@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "hackathon"
+version = "0.1.0"
+description = ""
+authors = ["geonwook"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+ipykernel = "^6.29.5"
+jupyter = "^1.1.1"
+polars = "^1.19.0"
+pandas = "^2.2.3"
+pyarrow = "^18.1.0"
+memory-profiler = "^0.61.0"
+graphviz = "^0.20.3"
+matplotlib = "^3.10.0"
+scikit-learn = "^1.6.1"
+tqdm = "^4.67.1"
+bs4 = "^0.0.2"
+
+
+[tool.poetry.group.dev.dependencies]
+commitizen = "^4.1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
