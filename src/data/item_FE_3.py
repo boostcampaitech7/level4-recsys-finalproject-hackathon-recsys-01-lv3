@@ -169,7 +169,7 @@ def calculate_price_volatility(log_data: pl.LazyFrame) -> pl.LazyFrame:
     return price_volatility
 
 
-def calculate_price_change_rate_ver1(log_data: pl.LazyFrame, base_date: pl.datetime) -> pl.LazyFrame:
+def calculate_price_change_rate_ver1(log_data: pl.LazyFrame, base_date: pl.Expr) -> pl.LazyFrame:
     """
     아이템별 기준 날짜일과 전날의 가격 변화율 계산.
     
@@ -203,7 +203,7 @@ def calculate_price_change_rate_ver1(log_data: pl.LazyFrame, base_date: pl.datet
     return price_change_rate
 
 
-def calculate_price_change_rate_ver2(log_data: pl.LazyFrame, base_date: pl.datetime) -> pl.LazyFrame:
+def calculate_price_change_rate_ver2(log_data: pl.LazyFrame, base_date: pl.Expr) -> pl.LazyFrame:
     """
     아이템별 기준 날짜일과 전날의 가격 변화율 계산.
     
