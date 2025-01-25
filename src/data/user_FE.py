@@ -1,7 +1,54 @@
-# /src/data/user_FE_2.py
-
 import polars as pl
 from src.utils import utility
+from tqdm import tqdm
+from src.utils import *
+
+def calculate_user_event_count(log_data: pl.LazyFrame, user_data: pl.LazyFrame) -> pl.DataFrame:
+    """
+    사용자별 view, cart, purchase 빈도 집계
+    Parameters: 
+        log_data: 전체 로그 데이터
+        user_data: 전체 유저 데이터
+    
+    Returns: 
+        pl.DataFrame: 사용자별 view, cart, purchase 빈도 집계 결과
+    """
+    df = (
+        log_data.drop_nulls()
+        .join(user_data, on='user_session_index', how='left')
+    )
+    user_event_count = df.group_by(['user_id_index', 'event_type_index']).agg([pl.len().alias('count')]).collect()
+    
+    return user_event_count.pivot(on='event_type_index', index='user_id_index', values='count').fill_null(0).rename({
+        '1': 'view_count', '2': 'cart_count', '3': 'purchase_count'
+    })
+    
+def calculate_user_avg_purchase_interval(log_data: pl.LazyFrame, user_data: pl.LazyFrame) -> pl.DataFrame:
+    """
+    사용자별 구매당 평균 소요 시간
+    Parameters: 
+        log_data: 전체 로그 데이터
+        user_data: 전체 유저 데이터
+    Returns:
+        pl.LazyFrame: 사용자별 구매당 평균 소요 시간
+    """
+    purchase_data = log_data.drop_nulls().filter(pl.col('event_type_index')==3)
+    customer_purchase_counts = purchase_data.unique().group_by('user_id_index').agg(
+        pl.len().alias('purchase_count')
+    )
+    ltv_data = (
+        purchase_data.join(user_data, on='user_session_index', how='left')
+        .group_by('user_id_index').agg([
+            pl.col('event_time_index').min().alias('first_purchase'),
+            pl.col('event_time_index').max().alias('last_purchase'),
+            pl.len().alias('purchase_count')
+        ])
+    )
+    ltv_data = utility.time_to_date(utility.time_to_date(ltv_data, column='first_purchase'), column='last_purchase')
+    ltv_data = ltv_data.with_columns([
+        (pl.col("last_purchase") - pl.col("first_purchase")).dt.total_days().alias('days_active')
+    ]).with_columns((pl.col("days_active") / (pl.col("purchase_count") - 1)).fill_nan(0).alias("avg_purchase_interval"))
+    return ltv_data.select(["user_id_index", "avg_purchase_interval"])
 
 def make_purchase_data(log_data: pl.DataFrame, user_data: pl.DataFrame,
                         item_data: pl.DataFrame, cat_table: pl.DataFrame, reference_date: pl.Expr) -> pl.DataFrame:
@@ -280,3 +327,83 @@ def make_LRFMV(purchase_data: pl.DataFrame, reference_date: pl.Expr, cat: str = 
     LRFMV_data = LRFMV_data.select(["user_id_index", f"L_{cat}", f"R_{cat}", f"F_{cat}", f"M_{cat}", f"V_{cat}"])
 
     return LRFMV_data
+
+
+def calculate_avg_purchase_price(log_data: pl.LazyFrame, user_data: pl.LazyFrame) -> pl.LazyFrame:
+    """
+    유저별 평균 구매가를 계산.
+    
+    Parameters:
+        log_data (pl.LazyFrame): 전체 로그 데이터.
+        user_data (pl.LazyFrame): 전체 유저 데이터.
+        
+    Returns:
+        pl.LazyFrame: 유저별 평균 구매가 데이터.
+    """
+    avg_purchase_price = (log_data
+        ).filter(pl.col('event_type_index') == 3
+        ).join(user_data, how='left', on='user_session_index'
+        ).group_by('user_id_index'
+        ).agg([
+            pl.col('price').mean().alias('avg_price')
+        ])
+    return avg_purchase_price
+
+
+def view2purchase_avg_time_by_user(log_data: pl.LazyFrame, user_data: pl.LazyFrame) -> pl.LazyFrame:
+    """
+    유저별 모든 아이템에 대한 첫 view2purhcase 시간 계산.
+    
+    Parameters:
+        log_data (pl.LazyFrame): 전체 로그 데이터.
+        user_data (pl.LazyFrame): 전체 유저 데이터.
+        
+    Returns:
+        pl.LazyFrame: 유저별 모든 아이템에 대한 첫 view2purchase 데이터.
+    """
+    log_time_data = event_time_id_to_date(log_data) 
+    
+    valid_product = (log_time_data
+        ).filter(pl.col('event_type_index') == 3)['product_id_index'].unique()
+    
+    purchase_product = (log_time_data
+        ).join(
+            user_data, how='left', on='user_session_index'
+        ).filter(
+            pl.col('product_id_index').is_in(valid_product)
+        ).select(
+            ['user_id_index', 'product_id_index', 'event_time_index', 'event_type_index']
+        ).sort(
+            'event_time_index'
+        )
+    
+    results = []
+    for user_group in tqdm(purchase_product.partition_by('user_id_index')):
+        user_id = user_group['user_id_index'][0]
+        time_diff_days_user = []
+        
+        for product_group in user_group.partition_by('product_id_index'):
+            first_view = None
+            time_diff_days = []
+            
+            for row in product_group.iter_rows(named=True):
+                event_type = row['event_type_index']
+                event_time = row['event_time_index']
+                
+                if event_type == 1 and first_view is None:
+                    first_view = event_time
+                elif event_type == 3 and first_view is not None:
+                    time_diff_seconds = (event_time - first_view).total_seconds()
+                    time_diff_days.append(time_diff_seconds / 86400)
+                    first_view = None
+            
+            time_diff_days_user.extend(time_diff_days)
+        
+        if time_diff_days_user:
+            results.append({
+                "user_id_index": user_id,
+                'view_to_purchase_time': sum(time_diff_days_user) / len(time_diff_days_user)
+            })
+    
+    view_to_purchase_time_by_user = pl.DataFrame(results)
+    return view_to_purchase_time_by_user
