@@ -51,7 +51,15 @@ def calculate_alter_product_and_market_share(cat_data: pl.LazyFrame, log_data:pl
     """
     cat_last_data = category_codes_to_last_category(cat_data)
     product_avg_price = calculate_product_avg_price(log_data)
-    product_avg_purchase_price = calculate_product_avg_purchase_price(log_data)
+    
+    sales_data = (log_data
+        ).filter(
+            pl.col('event_type_index')==3
+        ).group_by(
+            'product_id_index'
+        ).agg(
+            pl.len().alias('sales_count')
+        )
     
     join_data = (cat_last_data
         ).join(
@@ -59,9 +67,9 @@ def calculate_alter_product_and_market_share(cat_data: pl.LazyFrame, log_data:pl
         ).join(
             product_avg_price, how='left', on='product_id_index'
         ).join(
-            product_avg_purchase_price, how='left', on='product_id_index'
+            sales_data, how='left', on='product_id_index'
         ).select(
-            ['category_codes', 'category_id', 'product_id_index', 'avg_price', 'avg_purchase_price', 'brand_id']
+            ['category_codes', 'category_id', 'product_id_index', 'avg_price', 'brand_id', 'sales_count']
         )
     
     results = []
@@ -69,20 +77,22 @@ def calculate_alter_product_and_market_share(cat_data: pl.LazyFrame, log_data:pl
         unique_group = group.unique(subset='product_id_index')
         
         for row in unique_group.iter_rows(named=True):
-            if row['avg_price']:
+            if row['avg_price'] and row['sales_count']:
                 base_price = row['avg_price']
+                base_sales_count = row['sales_count']
+                base_sales_amount = base_price * base_sales_count
+                
                 similar_items = unique_group.filter(
                     (pl.col('avg_price') >= 0.9 * base_price) & 
                     (pl.col('avg_price') <= 1.1 * base_price) & 
                     (pl.col('brand_id') != row['brand_id'])
                 )
-                base_purchase_price = row['avg_purchase_price']
-                alternative_price = similar_items['avg_purchase_price'].sum()
+                alternative_sales_amount = (similar_items['avg_price'] * similar_items['sales_count']).sum()
                 
                 results.append({
                     'product_id_index': row['product_id_index'],
                     'alter_product_count': len(similar_items),
-                    'market_share': base_purchase_price / alternative_price if alternative_price != 0 else math.inf
+                    'market_share': (base_sales_amount / (alternative_sales_amount + base_sales_amount)) * 100
                 })
                 
     alter_prod_and_market_share = pl.DataFrame(results)
@@ -169,41 +179,7 @@ def calculate_price_volatility(log_data: pl.LazyFrame) -> pl.LazyFrame:
     return price_volatility
 
 
-def calculate_price_change_rate_ver1(log_data: pl.LazyFrame, base_date: pl.Expr) -> pl.LazyFrame:
-    """
-    아이템별 기준 날짜일과 전날의 가격 변화율 계산.
-    
-    Parameters:
-        log_data (pl.LazyFrame): 전체 로그 데이터.
-        
-    Returns:
-        pl.LazyFrame: 아이템별 가격 변화율 데이터.
-    """
-    log_time_data = event_time_id_to_date(log_data)
-    
-    filtered_df = (log_time_data
-        ).filter(
-            (pl.col('event_time_index') >= base_date - pl.duration(days=1)) &
-            (pl.col('event_time_index') < base_date + pl.duration(days=1))
-        ).sort(
-            'event_time_index'
-        )
-
-    price_change_rate = (filtered_df
-        ).group_by('product_id_index'
-        ).agg([
-            pl.col('price').first().alias('price_before'),
-            pl.col('price').last().alias('price_base')
-        ]).with_columns([
-            ((pl.col('price_base') - pl.col('price_before')) / pl.col('price_before') * 100).alias('price_change_rate')
-        ]).drop(
-            ['price_before', 'price_base']
-        )
-    
-    return price_change_rate
-
-
-def calculate_price_change_rate_ver2(log_data: pl.LazyFrame, base_date: pl.Expr) -> pl.LazyFrame:
+def calculate_price_change_rate(log_data: pl.LazyFrame, base_date: pl.Expr) -> pl.LazyFrame:
     """
     아이템별 기준 날짜일과 전날의 가격 변화율 계산.
     
