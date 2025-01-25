@@ -1,2 +1,10 @@
 /data/
+/work/
+.env
 *.ipynb
+/src/data/raw/
+/src/data/eda_results/
+/scripts/eda_task/
+*.pyc
+poetry.lock
+pyproject.toml
