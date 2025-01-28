@@ -58,65 +58,77 @@ class DynamicPricingEnv:
         """
         price_action, top_k_action = actions
 
-        # Price adjustment logic
+        # 현재 상태 가져오기
         current_row = self.df.row(self.current_day_idx, named=True)
         current_price = current_row["mean_price_per_day"]
-        
+        current_demand = current_row["demand_per_day"]
+        product_id = int(current_row["product_id_index"])
+
+        # 이전 상태를 기반으로 가격 탄력성 계산
+        if self.current_day_idx > 0:
+            previous_row = self.df.row(self.current_day_idx - 1, named=True)
+            previous_price = previous_row["mean_price_per_day"]
+            previous_demand = previous_row["demand_per_day"]
+
+            # 실제 데이터 기반 탄력성 계산
+            price_change = (current_price - previous_price) / max(previous_price, 1e-6)
+            demand_change = (current_demand - previous_demand) / max(previous_demand, 1e-6)
+
+            if price_change != 0:
+                new_elasticity = demand_change / price_change
+            else:
+                new_elasticity = self.price_elasticity  # 이전 값을 유지
+
+            # 이동 평균을 사용한 탄력성 업데이트
+            self.price_elasticity = 0.2 * new_elasticity + 0.8 * self.price_elasticity
+
+        else:
+            # 첫 번째 단계에서는 기본 탄력성 사용
+            self.price_elasticity = -1.0
+
+        # Action을 반영한 가격 조정
         next_price = max(0, current_price * (1 + price_action))
-                    
+
+        # Action 수행 후 예상 수요량 계산 (탄력성 적용)
+        next_demand = current_demand * (1 + price_action) ** self.price_elasticity
+
+        # Top-K 추천 정확도 계산
+        true_users = self.get_true_users(product_id)
+        precision_at_k_value = self.precision_at_k(product_id, true_users, top_k=int(top_k_action))
+
+        # 에피소드 종료 여부 확인
         self.current_day_idx += 1
         done = (self.current_day_idx >= len(self.df))
-        
-        # Extract true_users for the current product_id from interaction_matrix_csr
-        product_id = int(current_row["product_id_index"])
-        
-        true_users = self.get_true_users(product_id)
 
-        # Precision calculation using cached recommendations
-        precision_at_k_value = self.precision_at_k(product_id, true_users, top_k=int(top_k_action))
-        
         if done:
             return None, 0, done
-        
-        # Marketing Cost per Man
-        cost = 0.1
-        
+
+        # 다음 상태 가져오기
         next_row = self.df.row(self.current_day_idx, named=True)
-        
-        # Revenue 계산
-        revenue = (
-            (next_price * next_row["purchase_count_per_day"])
-        )
-        
-        # Unique Visitors 최소값 보장
-        uv = max(1, next_row["unique_visitors"])
-        
-        # RCR 계산
-        current_rcr = revenue / uv
+        next_unique_visitors = max(1, next_row["unique_visitors"])
 
-        # RCR 변화량 계산
-        if self.previous_rcr is not None:
-            rcr_change = ((current_rcr - self.previous_rcr))
-                        
-        else:
-            rcr_change = 0
+        # 수익 계산
+        revenue = next_price * next_demand
 
-        demand_change = next_row["purchase_count_per_day"] / max(1, current_row["purchase_count_per_day"])
-        total_cost = cost * int(top_k_action)
+        # RCR 계산 및 변화량 (Unique Visitor에 대한 예측값 설정 어려움 일단 사용 안함)
+        # current_rcr = revenue / next_unique_visitors
+        # rcr_change = (current_rcr - self.previous_rcr) if self.previous_rcr is not None else 0
 
-        # Normalize values using RewardNormalizer
-        reward = self.normalizer.normalize_reward(
-            revenue=revenue,
-            rcr_change=rcr_change,
-            precision_at_k_value=(next_price * precision_at_k_value * int(top_k_action) * demand_change) - total_cost,
-        )
+        # 마케팅 비용 계산
+        marketing_cost = 1 * int(top_k_action)  # 단위 비용 * Top-K 수
+
+        # 추천 모델 관련 보상
+        recsys_value = (next_price * precision_at_k_value * int(top_k_action) * next_demand) - marketing_cost
+
+        # 최종 보상 계산
+        reward = max(0.5 * recsys_value + 0.5 * revenue, 0)
 
         # 이전 RCR 업데이트
-        self.previous_rcr = current_rcr
-        
-        # 다음 상태 가져오기
+        # self.previous_rcr = current_rcr
+
+        # 다음 상태로 이동
         next_state = self._get_state(self.current_day_idx)
-        
+
         return next_state, reward, done
 
 
