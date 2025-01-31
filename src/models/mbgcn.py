@@ -336,7 +336,7 @@ class MBGCN(nn.Module):
                     sum_over_t = sum_over_t + alpha_vec[t_i] * score_t
                 elif self.alpha_mode == "per_user":
                     alpha_per_user = alpha_vec[t_i][user_idx]  # shape=(batch_size,)
-                    sum_over_t = sum_over_t + alpha_vec[t_i] * score_t
+                    sum_over_t = sum_over_t + alpha_per_user * score_t
                 else:
                     raise ValueError("alpha_mode must be 'global' or 'per_user'")
             else:
