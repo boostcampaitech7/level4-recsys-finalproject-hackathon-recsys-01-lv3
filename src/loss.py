@@ -24,6 +24,9 @@ def bpr_loss(pos_scores: torch.Tensor, neg_scores: torch.Tensor, model: torch.nn
     
     # 사용자 및 아이템 임베딩에 대한 L2 정규화
     l2_reg = torch.norm(model.user_emb, p=2) + torch.norm(model.item_emb, p=2)
+    # behavior-specific item embeddings까지 포함 가능
+    for p in model.s_item_emb:
+        l2_reg += torch.norm(p, p=2)
     
     # 최종 손실: BPR Loss + beta * L2 정규화
     loss += beta * l2_reg
