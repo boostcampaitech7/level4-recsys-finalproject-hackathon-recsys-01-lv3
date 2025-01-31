@@ -3,6 +3,7 @@
 .env
 *.ipynb
 /src/data/raw/
+/src/data/MBGCN/
 /src/data/eda_results/
 /scripts/eda_task/
 *.pyc

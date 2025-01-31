@@ -21,6 +21,7 @@ import scipy.sparse as sp
 import torch
 from torch.utils.data import Dataset
 from collections import defaultdict
+from typing import Dict, List
 
 ################################################
 # 1) Re-mapping user/item ID to index
@@ -94,7 +95,7 @@ def split_train_test(df: pl.DataFrame, user_col: str="user_id", item_col: str="i
         test_df (pl.DataFrame): 테스트 세트 데이터프레임.
     """
     # 사용자별로 정렬하여 시간 기준으로 분할
-    df_sorted = filtered_df.sort([user_col, time_col])
+    df_sorted = df.sort([user_col, time_col])
     user_count = df_sorted.group_by(user_col).agg(pl.len().alias('count'))
     user_count = user_count.with_columns(
         (pl.col('count') * test_ratio).ceil().cast(pl.Int64).alias('count_test')
@@ -157,7 +158,9 @@ def get_basic_stats(df: pl.DataFrame):
 ################################################
 def build_user_item_matrices(
     df: pl.DataFrame,
-    behaviors_map: dict = None
+    behaviors_map: dict = None,
+    user_map: dict = None,
+    item_map: dict = None
 ):
     """
     행동(behavior)별로 user-item CSR 행렬을 생성하되,
@@ -166,9 +169,9 @@ def build_user_item_matrices(
     
     Args:
         - df: (user_id, item_id, behavior) DataFrame
-        - num_users, num_items: 행렬 크기를 결정하기 위한 값 (max_id + 1)
-        - behavior_map: {1:'view',2:'cart',3:'purchase'}와 같이 behavior를 구분하는 딕셔너리
-                   -> 실제 구현에서는 {1:'view', ...}처럼 써도 되고, 그냥 숫자로만 구분해도 됨
+        - behaviors_map (dict, optional): 행동 코드에서 행동 이름으로의 매핑
+        - user_map (dict, optional): 기존 사용자 매핑
+        - item_map (dict, optional): 기존 아이템 매핑
     Returns:
         - dict 형태
             예: {
@@ -183,10 +186,20 @@ def build_user_item_matrices(
     """
     if behaviors_map is None:
         behaviors_map = { 1: "view", 2: "cart", 3: "purchase"}
-    
-    # 먼저 user_id, item_id 재매핑
-    df_u, user_map = remap_ids(df, "user_id")
-    df_ui, item_map = remap_ids(df_u, "item_id")
+    # user_id, item_id 재매핑
+    if user_map is None:
+        df_u, user_map = remap_ids(df, "user_id")
+    else:
+        df_u = df.with_columns([
+            pl.col("user_id").replace(user_map).alias("user_id_mapped")
+        ])
+    if item_map is None:
+        df_ui, item_map = remap_ids(df_u, "item_id")
+    else:
+        df_ui = df_u.with_columns([
+            pl.col("item_id").replace(item_map).alias("item_id_mapped")
+        ])
+        
     del df, df_u
     
     # 재매핑된 user/item 컬럼 이름 (user_id_mapped, item_id_mapped)
@@ -385,10 +398,48 @@ def build_item_item_matrices_topk_approx(
     return item_item_dict
 
 ################################################
-# 7) BPR Dataset for negative sampling
+# 7) Build user behavior Dictionary
 ################################################
 
-class BPRTrainDataset(Dataset):
+def build_user_behavior_dict(df: pl.DataFrame, user_map: Dict[int, int], item_map: Dict[int, int], behaviors: List[str]) -> Dict[str, Dict[int, List[int]]]:
+    """
+    사용자별 행동별 아이템 리스트 생성
+    
+    Returns:
+        - user_bhv_dict: {behavior: {user_id: [item_ids]}}
+    """
+    
+    event_table = {
+        "1": "view", 
+        "2": "cart",
+        "3": "purchase"
+    }
+    df = df.with_columns(
+        pl.col('behavior').cast(pl.String).replace(event_table)
+    )
+    user_bhv_dict = defaultdict(lambda: defaultdict(list))
+    for row in df.to_dicts():
+        orig_user = row['user_id']
+        orig_item = row['item_id']
+        behavior = row['behavior']
+        
+        # 매핑된 인덱스로 변환
+        mapped_user = user_map.get(orig_user, None)
+        mapped_item = item_map.get(orig_item, None)
+        
+        if mapped_user is None or mapped_item is None:
+            # 매핑되지 않은 사용자 또는 아이템은 무시하거나 로그를 남길 수 있습니다.
+            continue
+        
+        user_bhv_dict[behavior][mapped_user].append(mapped_item)
+    
+    return user_bhv_dict
+
+################################################
+# 8) BPR Dataset for negative sampling
+################################################
+
+class BPRDataset(Dataset):
     """
     BPR Dataset (Scenario A)
         - Positive = (user, item) where user purchased item
@@ -429,12 +480,16 @@ class BPRTrainDataset(Dataset):
 
         # Negative Sampling 벡터화 (수정)
         neg_items = []
+        user_interactions = set(self.mat[u].indices)
         while len(neg_items) < self.neg_size:
             neg_candidates = np.random.randint(0, self.num_items, size=self.neg_size * 2)
-            neg_mask = (self.mat[u].toarray().flatten()[neg_candidates] == 0)  # numpy 변환 후 인덱싱
-            valid_neg = neg_candidates[neg_mask]
-            neg_items.extend(valid_neg.tolist())
-            neg_items = neg_items[:self.neg_size]
+            # Ensure neg_candidates are within bounds
+            neg_candidates = np.clip(neg_candidates, 0, self.num_items - 1)
+            # Check if user has not interacted with neg_candidates
+            valid_neg = [item for item in neg_candidates if item not in user_interactions]
+            neg_items.extend(valid_neg)
+            # Remove duplicates and limit to neg_size
+            neg_items = list(dict.fromkeys(neg_items))[:self.neg_size]
         
         # 만약 충분한 부정 샘플이 없으면 0으로 채움
         if len(neg_items) < self.neg_size:
