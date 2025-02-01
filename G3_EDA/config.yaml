@@ -1,0 +1,6 @@
+data:
+  raw: "../data/rawdata"
+  group: "../data/group_data"
+  map: "../data/mapping_data"
+
+img: "./img"

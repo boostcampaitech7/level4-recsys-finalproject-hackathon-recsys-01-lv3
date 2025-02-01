@@ -1,2 +1,11 @@
 /data/
 *.ipynb
+*.parquet
+*.png
+*.csv
+*.html
+*.tar
+*.tar.gz
+*.pyc
+poetry.lock
+pyproject.toml
