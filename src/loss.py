@@ -3,7 +3,7 @@ import torch.nn.functional as F
 
 def bpr_loss(pos_scores: torch.Tensor, neg_scores: torch.Tensor,
              pos_L2: torch.Tensor, neg_L2: torch.Tensor,
-             beta: float) -> torch.Tensor:
+             batch_size: int, beta: float) -> torch.Tensor:
     """
     L2 정규화가 적용된 BPR Loss 계산 함수.
     
@@ -18,8 +18,9 @@ def bpr_loss(pos_scores: torch.Tensor, neg_scores: torch.Tensor,
         loss (Tensor): 최종 BPR Loss (스칼라)
     """
     # BPR Loss 계산: 긍정-음수 차이에 대해 로그 시그모이드 취함
-    loss = -torch.mean(F.logsigmoid(pos_scores - neg_scores))
+    loss = torch.mean(-torch.log(torch.sigmoid(pos_scores - neg_scores) + 1e-8))
     # 두 forward 호출에서 나온 L2_loss를 평균 내어 정규화 항에 반영
     L2_loss = (pos_L2 + neg_L2) / 2.0
-    loss += 0.5 * beta * L2_loss
+    # loss += 0.5 * beta * L2_loss
+    loss += L2_loss / batch_size
     return loss

@@ -1,4 +1,5 @@
 import os
+import random
 import torch
 import numpy as np
 import scipy.sparse as sp
@@ -10,7 +11,8 @@ class TrainDataset(Dataset):
         data_path: str,
         dataset_name: str,
         relations: str="buy,cart,click,collect",
-        sample_epoch: int=0
+        neg_sample_size: int = 1,   # 각 positive sample 당 negative sample 수
+        debug_sample: bool = False  # 디버깅 메시지 출력 여부
     ):
         """
         Args:
@@ -22,6 +24,8 @@ class TrainDataset(Dataset):
         super().__init__()
         self.path = data_path
         self.name = dataset_name
+        self.neg_sample_size = neg_sample_size
+        self.debug_sample = debug_sample
         self._decode_relation(relations)
         self._load_size()
         self._create_relation_matrix()
@@ -29,8 +33,11 @@ class TrainDataset(Dataset):
         self._generate_ground_truth()
         self._generate_train_matrix()
         self._load_item_graph()
-        self.cnt = sample_epoch
-        self._read_train_data(self.cnt)
+        # self.cnt = sample_epoch
+        # self._read_train_data(self.cnt)
+        self._build_user_positive() # build user -> pos set for negative sampling
+        # build item frequency and negative sampling distribution (using exponent 0.75)
+        self._build_item_sampling_distribution()
         
     def _decode_relation(self, relations_str: str):
         # e.g. "buy,cart,click,collect" => ["buy", "cart", "click", "collect"]
@@ -196,48 +203,99 @@ class TrainDataset(Dataset):
         )
         self.train_matrix = sp_tensor.coalesce()
         
-    def _read_train_data(self, i):
+    # def _read_train_data(self, i):
+    #     """
+    #     read sample_file/sampe_{i}.txt => user, pos_item, neg_item
+    #     store in self.train_tmp => shape=(N, 3)
+    #     """
+    #     sample_dir = os.path.join(self.path, self.name, 'sample_file')
+    #     sample_file = os.path.join(sample_dir, f'sample_{i}.txt')
+    #     if not os.path.exists(sample_file):
+    #         print(f"[WARNING] {sample_file} not found => maybe no negative sampling? empty.")
+    #         self.train_tmp = torch.zeros((0,3), dtype=torch.long)
+    #         return
+    #     tmp_array = []
+    #     with open(sample_file, 'r') as f:
+    #         lines = f.readlines()
+    #         for row in lines:
+    #             user_str, pid_str, nid_str = row.strip().split()
+    #             user, pid, nid = int(user_str), int(pid_str), int(nid_str)
+    #             tmp_array.append([user, pid, nid])
+    #     if len(tmp_array)==0:
+    #         self.train_tmp = torch.zeros((0,3), dtype=torch.long)
+    #     else:
+    #         self.train_tmp = torch.LongTensor(tmp_array)
+    #     print(f"[INFO] Read Epoch {i} Train Data => shape={self.train_tmp.shape}")
+    
+    def _build_user_positive(self):
         """
-        read sample_file/sampe_{i}.txt => user, pos_item, neg_item
-        store in self.train_tmp => shape=(N, 3)
+        각 사용자별로 이미 본 아이템 집합을 딕셔너리 형태로 저장
+        CSR Matrix의 indptr와 indices를 활용
         """
-        sample_dir = os.path.join(self.path, self.name, 'sample_file')
-        sample_file = os.path.join(sample_dir, f'sample_{i}.txt')
-        if not os.path.exists(sample_file):
-            print(f"[WARNING] {sample_file} not found => maybe no negative sampling? empty.")
-            self.train_tmp = torch.zeros((0,3), dtype=torch.long)
-            return
-        tmp_array = []
-        with open(sample_file, 'r') as f:
-            lines = f.readlines()
-            for row in lines:
-                user_str, pid_str, nid_str = row.strip().split()
-                user, pid, nid = int(user_str), int(pid_str), int(nid_str)
-                tmp_array.append([user, pid, nid])
-        if len(tmp_array)==0:
-            self.train_tmp = torch.zeros((0,3), dtype=torch.long)
-        else:
-            self.train_tmp = torch.LongTensor(tmp_array)
-        print(f"[INFO] Read Epoch {i} Train Data => shape={self.train_tmp.shape}")
+        self.user_positive = {}
+        gt = self.ground_truth
+        for user in range(self.num_users):
+            start = gt.indptr[user]
+            end = gt.indptr[user+1]
+            # gt.indices[start:end]는 해당 사용자의 positive 아이템 인덱스
+            self.user_positive[user] = set(gt.indices[start:end])
+        # 디버깅 코드
+        if self.debug_sample:
+            print(f"DEBUG: Built user_positive mapping for {len(self.user_positive)} users.")
+        
+    def _build_item_sampling_distribution(self):
+        """
+        train 데이터를 기반으로 각 아이템의 등장 빈도를 계산한 후,
+        negative sampling을 위한 확률 분포를 만든다.
+        여기서는 빈도의 0.75승을 사용하여 확률을 재조정한다.
+        """
+        # 아이템 등장 횟수 계산(ground_truth의 non-zero count)
+        freq = self.ground_truth.getnnz(axis=0).astype(np.float32)  # shape: (num_items,)
+        # smoothing exponent 0.75 (Word2Vec 등에서 사용하는 방식)
+        freq_pow = np.power(freq, 0.75)
+        total = freq_pow.sum()
+        self.neg_prob = freq_pow / total # shape: (num_items,)
+        # 디버깅:
+        if self.debug_sample:
+            print(f"DEBUG: Negative sampling probability: min={self.neg_prob.min():.6f}, max={self.neg_prob.max():.6f}, sum={self.neg_prob.sum():.6f}")
 
-    def newit(self):
+    def _sample_negative(self, user):
         """
-        move to next sample_x.txt
+        주어진 user에 대해, 이미 본 아이템이 아닌 negative sample을
+        weighted sampling (self.neg_prob)을 사용하여 선택
         """
-        self.cnts += 1
-        self._read_train_data(self.cnt)
+        max_trials = 1000
+        trial = 0
+        while trial < max_trials:
+            # np.random.choice를 이용해 음성 샘플 하나 선택 (부정 샘플 수가 1개인 경우)
+            neg_item = int(np.random.choice(self.num_items, p=self.neg_prob))
+            if neg_item not in self.user_positive.get(user, set()):
+                return neg_item
+            trial += 1
+        # 디버깅: 만약 max_trials번 내에 샘플링 실패 시, 강제로 반환 (예외 발생 가능)
+        print(f"DEBUG: Failed to sample negative for user {user} after {max_trials} trials. Returning last candidate {neg_item}")
+        return neg_item
+
+    # def newit(self):
+    #     """
+    #     move to next sample_x.txt
+    #     """
+    #     self.cnts += 1
+    #     self._read_train_data(self.cnt)
     
     def __getitem__(self, idx):
         """
-        => return user, (pos_item, neg_item)
-        train_tmp[idx, :] => (user, pos, neg)
-        user => shape=(1,)
-        items => shape=(2,) => (pos,neg)
+        각 인덱스에 대해 (user, (pos_item, neg_item)) 반환
         """
-        row = self.train_tmp[idx]   # shape=(3,)
-        user = row[0].unsqueeze(-1) # shape=(1,)
-        pin = row[1:]               # shape=(2,)
-        return user, pin
+        # checkins는 (user, pos_item) 쌍입니다.
+        user, pos_item = self.checkins[idx]
+        neg_items = []
+        for _ in range(self.neg_sample_size):
+            neg = self._sample_negative(user)
+            neg_items.append(neg)
+        # if self.debug_sample:
+        #     print(f"DEBUG: For user {user}, pos_item {pos_item}, sampled neg_item(s) {neg_items}")
+        return torch.tensor([user]), torch.tensor( [pos_item] + neg_items )
     
     def __len__(self):
         """
