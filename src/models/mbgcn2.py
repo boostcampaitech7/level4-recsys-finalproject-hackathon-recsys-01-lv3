@@ -229,8 +229,6 @@ class MBGCN(ModelBase):
         # print("DEBUG: user_feature shape before dropout:", user_feature.shape)
         # print("DEBUG: item_feature shape before dropout:", item_feature.shape)
 
-        
-        
         # 메시지 드롭아웃 적용
         user_feature = self.message_drop(user_feature)
         item_feature = self.message_drop(item_feature)
