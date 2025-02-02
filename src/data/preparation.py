@@ -401,7 +401,12 @@ def build_item_item_matrices_topk_approx(
 # 7) Build user behavior Dictionary
 ################################################
 
-def build_user_behavior_dict(df: pl.DataFrame, user_map: Dict[int, int], item_map: Dict[int, int], behaviors: List[str]) -> Dict[str, Dict[int, List[int]]]:
+def build_user_behavior_dict(df: pl.DataFrame, user_map: Dict[int, int], item_map: Dict[int, int], behaviors: List[str], 
+                             event_table: Dict[int, str] = {
+        "1": "view", 
+        "2": "cart",
+        "3": "purchase"
+    }) -> Dict[str, Dict[int, List[int]]]:
     """
     사용자별 행동별 아이템 리스트 생성
     
@@ -501,3 +506,325 @@ class BPRDataset(Dataset):
             "neg_item": torch.LongTensor(neg_items)
         }
     
+################################################################################################
+################################################################################################
+################################################################################################
+
+import pandas as pd
+
+def load_tmall_data(
+    root_dir: str = "src/data/MBGCN/Tmall"
+):
+    """
+    Tmall 데이터(멀티 행동 buy, cart, click, collect + train/test/val)를 로드하여,
+    우리의 기존 코드에서 쓰는 자료구조를 생성한다.
+
+    Args:
+        root_dir (str): Tmall 데이터가 위치한 디렉토리 (e.g. "src/data/MBGCN/Tmall")
+    
+    Returns:
+        num_users (int)
+        num_items (int)
+        ui_mats (dict): 예: {"buy": sp.csr_matrix, "cart": sp.csr_matrix, "click":..., "collect":...}
+        ii_mats (dict): 예: {"buy": sp.csr_matrix, "cart":..., ...}
+        train_df (pd.DataFrame): (user, item) 열
+        valid_df (pd.DataFrame)
+        test_df  (pd.DataFrame)
+        user_bhv_dict (dict): { behavior: { user_id: [item_ids...] } }
+    
+    Note:
+        - txt파일 내 user/item ID가 이미 0-based라고 가정.
+        - 만약 1-based라면, 별도 -1 처리 필요.
+    """
+    # 1) data_size.txt
+    size_path = os.path.join(root_dir, "data_size.txt")
+    with open(size_path, "r") as f:
+        line = f.readline().strip()
+        num_users, num_items = line.split()
+        num_users, num_items = int(num_users), int(num_items)
+
+    # 2) 행동별 user-item txt => CSR matrix
+    behavior_list = ["buy", "cart", "click", "collect"]
+    ui_mats = {}
+
+    for bhv in behavior_list:
+        txt_path = os.path.join(root_dir, f"{bhv}.txt")
+        # 로드
+        user_arr = []
+        item_arr = []
+        with open(txt_path, "r") as bf:
+            for row in bf:
+                u_str, i_str = row.strip().split()
+                u = int(u_str)
+                i = int(i_str)
+                user_arr.append(u)
+                item_arr.append(i)
+        data = np.ones(len(user_arr), dtype=np.float32)
+        # COO => CSR
+        coo = sp.coo_matrix((data, (user_arr, item_arr)), shape=(num_users, num_items))
+        ui_mats[bhv] = coo.tocsr()
+
+    # 3) 아이템-아이템 그래프 => ii_mats
+    #   item_buy.pth 등 (11953 x 11953) torch int32 텐서
+    #   => sparse로 변환 or coo?
+    ii_mats = {}
+    for bhv in behavior_list:
+        pth_path = os.path.join(root_dir, "item", f"item_{bhv}.pth")
+        if os.path.exists(pth_path):
+            item_graph_tensor = torch.load(pth_path)  # shape=[num_items,num_items], dtype=torch.int32
+            # Tensor -> coo -> csr
+            item_graph_np = item_graph_tensor.numpy().astype(np.float32)  # (11953,11953)
+            # 만약 0/1 (or count) 형식이라면 coo_matrix 변환
+            ii_coo = sp.coo_matrix(item_graph_np)
+            ii_csr = ii_coo.tocsr()
+            ii_mats[bhv] = ii_csr
+        else:
+            # 혹은 empty
+            ii_mats[bhv] = sp.csr_matrix((num_items, num_items), dtype=np.float32)
+
+    # 4) train.txt / validation.txt / test.txt => DataFrame
+    def load_pairs_to_df(txt_file):
+        pairs = []
+        with open(txt_file, "r") as f:
+            for row in f:
+                u_str, i_str = row.strip().split()
+                u = int(u_str)
+                i = int(i_str)
+                pairs.append((u, i))
+        df = pd.DataFrame(pairs, columns=["user_id", "item_id"])
+        return df
+
+    train_path = os.path.join(root_dir, "train.txt")
+    val_path   = os.path.join(root_dir, "validation.txt")
+    test_path  = os.path.join(root_dir, "test.txt")
+
+    train_df = load_pairs_to_df(train_path)
+    valid_df = load_pairs_to_df(val_path)
+    test_df  = load_pairs_to_df(test_path)
+
+    # 5) user_bhv_dict: {behavior: {u: [i1, i2,...]}, ...}
+    user_bhv_dict = {}
+    for bhv in behavior_list:
+        mat = ui_mats[bhv]  # csr_matrix
+        # row-based 접근
+        bhv_dict = {}
+        # mat.indptr[u], mat.indptr[u+1] 사이가 user u의 col indices
+        indptr = mat.indptr
+        indices = mat.indices
+        for u in range(num_users):
+            start = indptr[u]
+            end = indptr[u+1]
+            item_list = indices[start:end]
+            bhv_dict[u] = list(item_list)  # or np.ndarray
+        user_bhv_dict[bhv] = bhv_dict
+
+    # 반환
+    return (
+        num_users, 
+        num_items,
+        ui_mats,
+        ii_mats,
+        train_df,
+        valid_df,
+        test_df,
+        user_bhv_dict
+    )
+    
+def load_tmall_data_split(
+    root_dir: str = "src/data/MBGCN/Tmall"
+):
+    """
+    Tmall 데이터 구조:
+        Tmall/
+        ├── item/
+        │   ├── item_buy.pth
+        │   ├── item_cart.pth
+        │   ├── item_click.pth
+        │   └── item_collect.pth
+        ├── buy.txt
+        ├── cart.txt
+        ├── click.txt
+        ├── collect.txt
+        ├── data_size.txt
+        ├── test.txt
+        ├── train.txt
+        └── validation.txt
+
+    1) data_size.txt => num_users, num_items
+    2) train.txt, validation.txt, test.txt => (u,i) 쌍
+       => 각각 "학습/검증/테스트" 세트에 속한 (u,i) 목록
+    3) buy.txt / cart.txt / click.txt / collect.txt => 모든 (u,i)
+       => (u,i)가 train에 속하면 ui_mats_train["buy"][u,i] = 1
+          valid면 ui_mats_valid["buy"][u,i] = 1, 등등
+    4) item_buy.pth / item_cart.pth ... => 아이템-아이템 그래프
+       => ii_mats["buy"], etc.
+    5) user_bhv_dict_{train,valid,test}: { behavior: { user_id: [item_ids...] } }
+
+    Returns:
+        num_users (int)
+        num_items (int)
+
+        ui_mats_train (dict): {"buy":csr, "cart":csr, ...}
+        ui_mats_valid (dict)
+        ui_mats_test  (dict)
+
+        ii_mats (dict): {"buy":csr, "cart":..., ...} from item_buy.pth, etc.
+
+        train_df (pd.DataFrame): (user_id, item_id)
+        valid_df (pd.DataFrame)
+        test_df  (pd.DataFrame)
+
+        user_bhv_dict_train (dict): {behavior:{u:[i1,i2,...]}}
+        user_bhv_dict_valid (dict)
+        user_bhv_dict_test  (dict)
+    """
+
+    # 1) data_size.txt => num_users, num_items
+    size_path = os.path.join(root_dir, "data_size.txt")
+    with open(size_path, "r") as f:
+        line = f.readline().strip()
+        num_users_str, num_items_str = line.split()
+        num_users = int(num_users_str)
+        num_items = int(num_items_str)
+    print(f"[load_tmall_data_split] num_users={num_users}, num_items={num_items}")
+
+    # 2) 읽어서 (u,i) 목록을 세트로 보관 => train_set, valid_set, test_set
+    def load_pairs(txt_file):
+        pairs = []
+        with open(txt_file, "r") as f:
+            for line in f:
+                line=line.strip()
+                if not line: continue
+                parts=line.split()
+                if len(parts)<2: continue
+                u_str,i_str=parts
+                u=int(u_str); i=int(i_str)
+                pairs.append((u,i))
+        return pairs
+
+    train_txt = os.path.join(root_dir, "train.txt")
+    valid_txt = os.path.join(root_dir, "validation.txt")
+    test_txt  = os.path.join(root_dir, "test.txt")
+
+    train_pairs = load_pairs(train_txt)
+    valid_pairs = load_pairs(valid_txt)
+    test_pairs  = load_pairs(test_txt)
+
+    train_set = set(train_pairs)
+    valid_set = set(valid_pairs)
+    test_set  = set(test_pairs)
+
+    # dataframe
+    train_df = pd.DataFrame(train_pairs, columns=["user_id","item_id"])
+    valid_df = pd.DataFrame(valid_pairs, columns=["user_id","item_id"])
+    test_df  = pd.DataFrame(test_pairs,  columns=["user_id","item_id"])
+
+    print(f"[load_tmall_data_split] #train={len(train_df)}, #valid={len(valid_df)}, #test={len(test_df)}")
+
+    # 3) buy.txt / cart.txt / click.txt / collect.txt => behavior별 (user,item)
+    #    => (u,i)가 train_set에 있으면 ui_mats_train[behavior][u,i]=1
+    #    => valid_set, test_set 마찬가지
+    behavior_list = ["buy","cart","click","collect"]
+    ui_mats_train = {}
+    ui_mats_valid = {}
+    ui_mats_test  = {}
+
+    for bhv in behavior_list:
+        txt_file = os.path.join(root_dir, f"{bhv}.txt")
+        if not os.path.exists(txt_file):
+            # empty
+            ui_mats_train[bhv] = sp.csr_matrix((num_users,num_items), dtype=np.float32)
+            ui_mats_valid[bhv] = sp.csr_matrix((num_users,num_items), dtype=np.float32)
+            ui_mats_test[bhv]  = sp.csr_matrix((num_users,num_items), dtype=np.float32)
+            continue
+        # 읽기
+        row_train=[]; col_train=[]
+        row_valid=[]; col_valid=[]
+        row_test =[]; col_test=[]
+
+        with open(txt_file,"r") as f:
+            for line in f:
+                line=line.strip()
+                if not line: continue
+                parts=line.split()
+                if len(parts)<2: continue
+                u_str,i_str=parts
+                u=int(u_str); i=int(i_str)
+                if (u,i) in train_set:
+                    row_train.append(u); col_train.append(i)
+                elif (u,i) in valid_set:
+                    row_valid.append(u); col_valid.append(i)
+                elif (u,i) in test_set:
+                    row_test.append(u); col_test.append(i)
+                else:
+                    # (u,i)가 어느 세트에도 없는 => 무시
+                    pass
+
+        data_train = np.ones(len(row_train), dtype=np.float32)
+        data_valid = np.ones(len(row_valid), dtype=np.float32)
+        data_test  = np.ones(len(row_test),  dtype=np.float32)
+
+        # COO => CSR
+        mat_train = sp.coo_matrix((data_train,(row_train,col_train)), shape=(num_users,num_items)).tocsr()
+        mat_valid = sp.coo_matrix((data_valid,(row_valid,col_valid)), shape=(num_users,num_items)).tocsr()
+        mat_test  = sp.coo_matrix((data_test, (row_test, col_test)),  shape=(num_users,num_items)).tocsr()
+
+        ui_mats_train[bhv] = mat_train
+        ui_mats_valid[bhv] = mat_valid
+        ui_mats_test[bhv]  = mat_test
+
+        print(f"behavior={bhv}, train nnz={mat_train.nnz}, valid nnz={mat_valid.nnz}, test nnz={mat_test.nnz}")
+
+    # 4) user_bhv_dict_{train,valid,test}
+    def build_user_bhv_dict(mats_dict):
+        """
+        mats_dict = {behavior: CSR}
+        => {behavior:{u:[items...]}}
+        """
+        ret={}
+        for bhv,mat in mats_dict.items():
+            ret_b = {}
+            indptr=mat.indptr
+            indices=mat.indices
+            for u in range(num_users):
+                start=indptr[u]
+                end=indptr[u+1]
+                items=indices[start:end]
+                ret_b[u]=list(items)
+            ret[bhv]=ret_b
+        return ret
+
+    user_bhv_dict_train = build_user_bhv_dict(ui_mats_train)
+    user_bhv_dict_valid = build_user_bhv_dict(ui_mats_valid)
+    user_bhv_dict_test  = build_user_bhv_dict(ui_mats_test)
+
+    # 5) 아이템-아이템 그래프 => ii_mats
+    #    item_buy.pth, item_cart.pth, ...
+    ii_mats = {}
+    for bhv in behavior_list:
+        pth_path = os.path.join(root_dir, "item", f"item_{bhv}.pth")
+        if os.path.exists(pth_path):
+            item_graph_tensor = torch.load(pth_path)  # shape=[num_items, num_items]
+            item_graph_np = item_graph_tensor.numpy().astype(np.float32)
+            coo = sp.coo_matrix(item_graph_np)
+            csr_ = coo.tocsr()
+            ii_mats[bhv] = csr_
+        else:
+            # empty
+            ii_mats[bhv] = sp.csr_matrix((num_items,num_items), dtype=np.float32)
+
+    # 반환
+    return (
+        num_users,
+        num_items,
+        ui_mats_train,
+        ui_mats_valid,
+        ui_mats_test,
+        ii_mats,
+        train_df,
+        valid_df,
+        test_df,
+        user_bhv_dict_train,
+        user_bhv_dict_valid,
+        user_bhv_dict_test
+    )

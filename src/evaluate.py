@@ -43,8 +43,9 @@ def evaluate(
     
     # 1) (옵션) encode 스킵 or 호출
     if not skip_encode:
-        model.embedding_cached.fill_(0)
-        model.encode()
+        with torch.no_grad():
+            model.embedding_cached.fill_(0)
+            model.encode()
     
     recall_metrics = {k: Recall(k) for k in K}
     precision_metrics = {k: Precision(k) for k in K}
@@ -56,6 +57,7 @@ def evaluate(
     if ui_mats_train is not None and 'purchase' in ui_mats_train:
         # CSR
         purchase_csr = ui_mats_train['purchase']
+        
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(data_loader, desc="Evaluating")):
             user_ids = batch['user'].squeeze().to(device)          # shape=(batch_size,)
@@ -103,7 +105,8 @@ def evaluate(
                 # NDCG => DCG / IDCG
                 dcg_k = dcg_matrix[:, :k_].sum(dim=1)
                 idcg_k = torch.ones_like(dcg_k)  # single relevant doc => DCG=1, real formula ~ 1/log2(2)=1
-                ndcg_val = dcg_k/idcg_k
+                # ndcg_val = dcg_k/idcg_k
+                ndcg_val = dcg_k / 1.0
                 ndcg_metrics[k_].update(ndcg_val)
                     
     # Compute final metrics
@@ -221,7 +224,7 @@ def evaluate_with_profiler(
             'Recall': recall_metrics[k].compute(),
             'Precision': precision_metrics[k].compute(),
             'MRR': mrr_metrics[k].compute(),
-            'NDCG': ndcg_metrics[k].compute()
+            'NDCG': ndcg_metrics[k].compute()item_item
         }
     
     model.train()
