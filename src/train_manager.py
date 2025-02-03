@@ -230,9 +230,10 @@ class TrainManager:
             log = (f"{Fore.WHITE}{Style.BRIGHT}Epoch {epoch:03d}/{self.args.epoch:03d} | "
                    f"{Fore.YELLOW}Train Loss: {train_loss:.6f}\n"
                 #    + " | ".join([f"{Fore.GREEN}Train Recall@{k}: {train_metrics[f'Recall@{k}']:.4f}" for k in [10, 20, 40]])
-                   + "\n" + " | ".join([f"{Fore.BLUE}Valid Recall@{k}: {valid_metrics[f'Recall@{k}']:.4f}" for k in [10, 20, 40]])
-                   +        " | ".join([f"{Fore.CYAN}Valid NDCG@{k}: {valid_metrics[f'NDCG@{k}']:.4f}" for k in [10, 20, 40]])
-                   + f" | {Fore.MAGENTA}Time: {epoch_time:.2f}s")
+                   + " | ".join([f"{Fore.BLUE}Valid Recall@{k}: {valid_metrics[f'Recall@{k}']:.4f}" for k in [10, 20, 40]])
+                   + " | "
+                   + " | ".join([f"{Fore.CYAN}Valid NDCG@{k}: {valid_metrics[f'NDCG@{k}']:.4f}" for k in [10, 20, 40]])
+                   + f" | {Fore.MAGENTA}Time: {epoch_time:.2f}s\n")
             print(log)
             # Early stopping 기준: Recall@40 on validation
             if valid_metrics["Recall@40"] > best_recall:
