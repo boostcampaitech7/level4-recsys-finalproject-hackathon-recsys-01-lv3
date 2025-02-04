@@ -248,4 +248,3 @@ class MBGCN(ModelBase):
         scores = score1 + self.lamb * score2
         return scores
 
-

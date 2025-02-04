@@ -11,7 +11,6 @@ from colorama import init, Fore, Style
 import random
 
 from src.data.dataset import TrainDataset, TestDataset
-# from src.models.mf import BPRMF
 from src.models.mbgcn2 import MF, MBGCN
 from src.utils.metrics import Recall, Precision, NDCG, MRR
 from src.loss import bpr_loss
@@ -52,25 +51,25 @@ class TrainManager:
         )
         self.train_loader = DataLoader(
             self.train_dataset,
-            batch_size=args.batch_size,
+            batch_size=args.train_batch_size,
             shuffle=True,
             num_workers=4
         )
         self.train_eval_loader = DataLoader(
             self.train_eval_dataset,
-            batch_size=args.batch_size,
+            batch_size=args.train_batch_size,
             shuffle=False,
             num_workers=4
         )
         self.valid_loader = DataLoader(
             self.valid_dataset,
-            batch_size=args.batch_size,
+            batch_size=args.valid_batch_size,
             shuffle=False,
             num_workers=4
         )
         self.test_loader = DataLoader(
             self.test_dataset,
-            batch_size=args.batch_size,
+            batch_size=args.valid_batch_size,
             shuffle=False,
             num_workers=4
         )
@@ -198,7 +197,7 @@ class TrainManager:
             pos_scores, pos_L2 = self.model(user_ids, pos_item_ids)
             neg_scores, neg_L2 = self.model(user_ids, neg_item_ids)
             
-            loss = bpr_loss(pos_scores, neg_scores, pos_L2, neg_L2, self.args.batch_size, self.args.L2_norm)
+            loss = bpr_loss(pos_scores, neg_scores, pos_L2, neg_L2, self.args.train_batch_size, self.args.L2_norm)
             loss.backward()
             # self.model 내의 behavior_alpha gradient 확인
             # print("[DEBUG] behavior_alpha grad:", self.model.behavior_alpha.grad)
@@ -231,7 +230,7 @@ class TrainManager:
                    f"{Fore.YELLOW}Train Loss: {train_loss:.6f}\n"
                 #    + " | ".join([f"{Fore.GREEN}Train Recall@{k}: {train_metrics[f'Recall@{k}']:.4f}" for k in [10, 20, 40]])
                    + "\n" + " | ".join([f"{Fore.BLUE}Valid Recall@{k}: {valid_metrics[f'Recall@{k}']:.4f}" for k in [10, 20, 40]])
-                   +        " | ".join([f"{Fore.CYAN}Valid NDCG@{k}: {valid_metrics[f'NDCG@{k}']:.4f}" for k in [10, 20, 40]])
+                   + "\n" + " | ".join([f"{Fore.CYAN}Valid NDCG@{k}: {valid_metrics[f'NDCG@{k}']:.4f}" for k in [10, 20, 40]])
                    + f" | {Fore.MAGENTA}Time: {epoch_time:.2f}s")
             print(log)
             # Early stopping 기준: Recall@40 on validation
@@ -253,14 +252,16 @@ class TrainManager:
         for k in sorted(final_test_metrics.keys()):
             print(f"{k}: {final_test_metrics[k]:.4f}")
         
-        # 임베딩 저장
-        if not os.path.exists(self.args.save_path):
-            os.makedirs(self.args.save_path)
-        user_emb = self.model.user_emb.detach().cpu().numpy()
-        item_emb = self.model.item_emb.detach().cpu().numpy()
-        np.save(os.path.join(self.args.save_path, "user_embed.npy"), user_emb)
-        np.save(os.path.join(self.args.save_path, "item_embed.npy"), item_emb)
-        print(Fore.GREEN + Style.BRIGHT + f">>> Saved model embeddings to {self.args.save_path}")
-    
-    
+        # 모델 저장: 최종 테스트 평가 이후에 모델을 저장합니다.
+        # 예를 들어, self.args.save_dir 경로에 best_model.pth 파일로 저장
+        save_path = self.args.save_path
+        os.makedirs(save_path, exist_ok=True)
+        save_dir = os.path.join(save_path, "best_model.pth")
+        torch.save(self.model.state_dict(), save_dir)
+        print(Fore.GREEN + Style.BRIGHT + f">>> Model saved at {save_dir}")
+
+        # 최종 평가 지표(예: Recall@40)를 반환하도록 수정
+        return final_test_metrics["Recall@40"]
+
+        
         
