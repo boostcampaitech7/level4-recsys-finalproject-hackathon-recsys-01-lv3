@@ -19,7 +19,7 @@ def parse_args():
     parser.add_argument("--embedding_size", type=int, default=64, help="Embedding dimension")
     
     # MBGCN 전용 인자
-    parser.add_argument("--num_layers", type=int, default=2, help="Number of propagation layers (for MBGCN)")
+    # parser.add_argument("--num_layers", type=int, default=2, help="Number of propagation layers (for MBGCN)")
     parser.add_argument("--lamb", type=float, default=0.5, help="Weight for user-based CF in final score (for MBGCN)")
     parser.add_argument("--node_dropout", type=float, default=0.2, help="Node dropout rate (for MBGCN)")
     parser.add_argument("--message_dropout", type=float, default=0.2, help="Message dropout rate (for MBGCN)")
@@ -37,7 +37,7 @@ def parse_args():
     # 데이터 관련 인자
     parser.add_argument("--data_path", type=str, default="Hackathon/src/data/MBGCN",
                         help="Root directory of dataset")
-    parser.add_argument("--dataset_name", type=str, default="Tmall",
+    parser.add_argument("--dataset_name", type=str, default="data/final",
                         help="Dataset name folder (e.g., Tmall)")
     parser.add_argument("--relations", type=str, default="buy,cart,click,collect",
                         help="Comma-separated relations")

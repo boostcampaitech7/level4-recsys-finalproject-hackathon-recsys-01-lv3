@@ -145,7 +145,7 @@ class TrainManager:
     
     def _evaluate_loader_train(self, loader):
         self.model.eval()
-        k_values = [10, 20, 40]
+        k_values = [20, 40, 80]
         recall_metrics = {k: Recall(topk=k) for k in k_values}
         ndcg_metrics = {k: NDCG(topk=k) for k in k_values}
         
@@ -162,15 +162,15 @@ class TrainManager:
                     hits = (ground_truth.gather(1, topk_items) > 0).any(dim=1).float()
                     recall_metrics[k].update(hits)
                     
-                    batch_size = user_ids.size(0)
-                    ndcg_vals = torch.zeros(batch_size, device=self.device)
-                    for i in range(batch_size):
-                        rel = ground_truth[i].gather(0, topk_items[i])
-                        nonzero = (rel > 0).nonzero(as_tuple=False)
-                        if nonzero.numel() > 0:
-                            rank = nonzero[0].item() + 1
-                            ndcg_vals[i] = 1.0 / np.log2(rank + 1)
-                    ndcg_metrics[k].update(ndcg_vals)
+                    # batch_size = user_ids.size(0)
+                    # ndcg_vals = torch.zeros(batch_size, device=self.device)
+                    # for i in range(batch_size):
+                    #     rel = ground_truth[i].gather(0, topk_items[i])
+                    #     nonzero = (rel > 0).nonzero(as_tuple=False)
+                    #     if nonzero.numel() > 0:
+                    #         rank = nonzero[0].item() + 1
+                    #         ndcg_vals[i] = 1.0 / np.log2(rank + 1)
+                    # ndcg_metrics[k].update(ndcg_vals)
         metrics = {}
         for k in k_values:
             metrics[f"Recall@{k}"] = recall_metrics[k].compute()
@@ -229,8 +229,8 @@ class TrainManager:
             log = (f"{Fore.WHITE}{Style.BRIGHT}Epoch {epoch:03d}/{self.args.epoch:03d} | "
                    f"{Fore.YELLOW}Train Loss: {train_loss:.6f}\n"
                 #    + " | ".join([f"{Fore.GREEN}Train Recall@{k}: {train_metrics[f'Recall@{k}']:.4f}" for k in [10, 20, 40]])
-                   + "\n" + " | ".join([f"{Fore.BLUE}Valid Recall@{k}: {valid_metrics[f'Recall@{k}']:.4f}" for k in [10, 20, 40]])
-                   + "\n" + " | ".join([f"{Fore.CYAN}Valid NDCG@{k}: {valid_metrics[f'NDCG@{k}']:.4f}" for k in [10, 20, 40]])
+                   + "\n" + " | ".join([f"{Fore.BLUE}Valid Recall@{k}: {valid_metrics[f'Recall@{k}']:.4f}" for k in [20, 40, 80]])
+                #    + "\n" + " | ".join([f"{Fore.CYAN}Valid NDCG@{k}: {valid_metrics[f'NDCG@{k}']:.4f}" for k in [10, 20, 40]])
                    + f" | {Fore.MAGENTA}Time: {epoch_time:.2f}s")
             print(log)
             # Early stopping 기준: Recall@40 on validation
