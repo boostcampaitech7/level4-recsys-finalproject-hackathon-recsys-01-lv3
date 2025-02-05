@@ -127,20 +127,20 @@ class TrainManager:
                     recall_metrics[k].update(hits)
                     
                     batch_size = user_ids.size(0)
-                    ndcg_vals = torch.zeros(batch_size, device=self.device)
-                    # 각 사용자별로 첫 hit의 rank를 계산
-                    for i in range(batch_size):
-                        # ground_truth.gather(1, topk_items[i].unsqueeze(1)) => (k,1), squeeze => (k,)
-                        rel = ground_truth[i].gather(0, topk_items[i])
-                        nonzero = (rel > 0).nonzero(as_tuple=False)
-                        if nonzero.numel() > 0:
-                            rank = nonzero[0].item() + 1  # 1-based rank
-                            ndcg_vals[i] = 1.0 / np.log2(rank + 1)
-                    ndcg_metrics[k].update(ndcg_vals)
+                    # ndcg_vals = torch.zeros(batch_size, device=self.device)
+                    # # 각 사용자별로 첫 hit의 rank를 계산
+                    # for i in range(batch_size):
+                    #     # ground_truth.gather(1, topk_items[i].unsqueeze(1)) => (k,1), squeeze => (k,)
+                    #     rel = ground_truth[i].gather(0, topk_items[i])
+                    #     nonzero = (rel > 0).nonzero(as_tuple=False)
+                    #     if nonzero.numel() > 0:
+                    #         rank = nonzero[0].item() + 1  # 1-based rank
+                    #         ndcg_vals[i] = 1.0 / np.log2(rank + 1)
+                    # ndcg_metrics[k].update(ndcg_vals)
         metrics = {}
         for k in k_values:
             metrics[f"Recall@{k}"] = recall_metrics[k].compute()
-            metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
+            # metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
         return metrics
     
     def _evaluate_loader_train(self, loader):
@@ -174,7 +174,7 @@ class TrainManager:
         metrics = {}
         for k in k_values:
             metrics[f"Recall@{k}"] = recall_metrics[k].compute()
-            metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
+            # metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
         return metrics
     
     def train_epoch(self):
