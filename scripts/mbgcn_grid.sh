@@ -17,6 +17,7 @@ save_base_dir="src/data/MBGCN/data/final/trained_models"
 lamb=0.5
 node_dropout=0.2
 message_dropout=0.2
+mgnn_weight="[1.0, 1.0]"
 
 # lr과 l2_reg의 grid search 
 # lr_list=('1e-3', '3e-4', '1e-4')
@@ -45,6 +46,7 @@ do
             --epoch ${epoch} \
             --patience ${patience} \
             --embedding_size ${embedding_size} \
+            --mgnn_weight "${mgnn_weight}" \
             --lamb ${lamb} \
             --node_dropout ${node_dropout} \
             --message_dropout ${message_dropout} \

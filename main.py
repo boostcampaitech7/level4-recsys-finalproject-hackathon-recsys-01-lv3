@@ -1,6 +1,7 @@
 # main.py
 
 import argparse
+import ast
 import torch
 from src.train_manager import TrainManager
 
@@ -23,6 +24,8 @@ def parse_args():
     parser.add_argument("--lamb", type=float, default=0.5, help="Weight for user-based CF in final score (for MBGCN)")
     parser.add_argument("--node_dropout", type=float, default=0.2, help="Node dropout rate (for MBGCN)")
     parser.add_argument("--message_dropout", type=float, default=0.2, help="Message dropout rate (for MBGCN)")
+    parser.add_argument("--mgnn_weight", type=str, default="[1.0, 1.0]",
+                        help="Weights for MBGCN (input as a list, e.g., \"[1.0, 1.0]\")")
     
     # 사전 학습 임베딩 관련 인자
     parser.add_argument("--use_pretrain", action="store_true",
@@ -47,6 +50,12 @@ def parse_args():
                         help="Device to use for training")
     
     args = parser.parse_args()
+    
+    # 문자열로 받아진 mgnn_weight를 리스트로 변환
+    try:
+        args.mgnn_weight = ast.literal_eval(args.mgnn_weight)
+    except Exception as e:
+        raise ValueError(f"mgnn_weight 형식 변환에 실패했습니다. 받은 값: {args.mgnn_weight}") from e
     
     # train_manager.py와 모델 내부에서 사용하는 L2 정규화 인자 이름 통일 (L2_norm)
     args.L2_norm = args.l2_reg

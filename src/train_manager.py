@@ -96,7 +96,7 @@ class TrainManager:
         self.model.eval()
         # if self.args.model == "MBGCN":
         #     self.model.encode()
-        k_values = [10, 20, 40]
+        k_values = [20, 40, 80]
         recall_metrics = {k: Recall(topk=k) for k in k_values}
         ndcg_metrics = {k: NDCG(topk=k) for k in k_values}
         
