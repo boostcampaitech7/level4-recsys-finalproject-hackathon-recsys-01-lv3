@@ -3,7 +3,7 @@ import torch.optim as optim
 import numpy as np
 from collections import deque
 import random
-from src.models.rl_models import Actor, Critic
+from src.models.rl_models import SACActor, Critic
 
 
 class SACAgent:
@@ -12,7 +12,7 @@ class SACAgent:
         self.action_size = action_size
 
         # Actor 및 Critic 네트워크 생성
-        self.actor = Actor(state_size, action_size)
+        self.actor = SACActor(state_size, action_size)
         self.critic_1 = Critic(state_size, action_size)
         self.critic_2 = Critic(state_size, action_size)
 
@@ -95,9 +95,22 @@ class SACAgent:
             self.actor_optimizer.step()
 
     def act(self, state):
-        """Actor 네트워크를 사용하여 행동 선택."""
+        """Actor 네트워크를 사용하여 Stochastic Policy 기반 행동 선택."""
         state_tensor = torch.FloatTensor(state).unsqueeze(0)
+        
         with torch.no_grad():
-            action = self.actor(state_tensor).squeeze().numpy()
+            # Actor 네트워크에서 Mean과 Log Std 출력
+            mean_action, log_std = self.actor(state_tensor)
+            std_dev = torch.exp(log_std)  # 표준편차 계산
+            
+            # 가우시안 분포에서 샘플링된 액션
+            sampled_action = mean_action + std_dev * torch.randn_like(mean_action)
 
-        return np.clip(action[0], -1., 1.), int(np.clip(action[1], 5., 3000))
+            # Tanh로 [-1, 1] 범위로 제한 (SAC의 특성)
+            action = torch.tanh(sampled_action).squeeze().numpy()
+
+        # Scale the second action (e.g., top_k adjustment)
+        scale_value = self.scale_action(value=action[1], min_val=5, max_val=6000)
+
+        return np.clip(action[0], -1., 1.), int(np.clip(scale_value, 5., 6000)) # 가격 조정과 추천 인원 수 k 반환
+

@@ -4,7 +4,7 @@ import numpy as np
 from collections import deque
 import random
 from src.models.rl_models import Actor, Critic
-from src.util.add_noise import OUNoise
+from src.utils.add_noise import OUNoise
 
 class DDPGAgentWithCQL:
     def __init__(self, state_size, action_size):

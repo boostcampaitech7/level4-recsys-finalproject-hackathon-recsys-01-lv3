@@ -1,2 +1,6 @@
 /data/
 *.ipynb
+*.lock
+*.toml
+/scripts/eda/
+/src/data/MBGCN/

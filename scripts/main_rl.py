@@ -1,28 +1,55 @@
-from src.pipelines import train_agent
-from src.agent import SACAgent, DDPGAgent
+import os
+import sys
+project_root = os.path.join(os.path.expanduser("~"), "Hackathon")
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.agent.DQNTD3Agent import HRLAgent
 from src.data.preprocess_for_rl.environment import DynamicPricingEnv
+from src.data.preprocess_for_rl.cal_elasticity import ElasticityCalculator
+from src.data.preprocess_for_rl.data_preprocess import PreprocessRL
+import yaml
+import polars as pl
 
-# Initialize the environment (DynamicPricingEnv is assumed to be defined elsewhere)
-env = DynamicPricingEnv(df=df,
-                        interaction_matrix_csr=interaction_matrix_csr,
-                        item_similarity=item_similarity,
-                        item_user_scores=item_user_scores,
-                        true_users_by_product=true_users_by_product)
 
-# Initialize common parameters
-state_size = env.reset().shape[0]
-action_size = 2
+DATA_PATH = "/data/ephemeral/home/Hackathon/data/final_purchase_df.parquet"
+CONFIG = "/data/ephemeral/home/Hackathon/config/rl.yaml"
+REC_PATH = "/data/ephemeral/home/Hackathon/scripts/eda/item_topk.pkl"
 
-# Train SAC Agent
-print("Initializing and training SAC Agent...")
-sac_agent = SACAgent(state_size=state_size, action_size=action_size)
-sac_rewards = train_agent(env=env, agent=sac_agent, num_episodes=50, batch_size=128)
+def main():
+    # 설정 파일 로드
+    with open(CONFIG, "r") as file:
+        config = yaml.safe_load(file)
 
-# Train DDPG Agent
-print("Initializing and training DDPG Agent...")
-ddpg_agent = DDPGAgent(state_size=state_size, action_size=action_size)
-ddpg_rewards = train_agent(env=env, agent=ddpg_agent, num_episodes=50, batch_size=128)
+    # 데이터 불러오기
+    df = pl.read_parquet(DATA_PATH)
+    preprocess = PreprocessRL(df, REC_PATH)
 
-# Save or analyze results
-print("SAC Rewards:", sac_rewards)
-print("DDPG Rewards:", ddpg_rewards)
+    # 데이터 전처리
+    elasticity_calculator = ElasticityCalculator(df)
+    elasticity_df = elasticity_calculator.run()
+    train_df = preprocess.make_train_df()
+    recsys_df = preprocess.load_recsys()
+    true_user_df = preprocess.true_user_df()
+
+    # 환경 불러오기
+    env = DynamicPricingEnv(
+        df=train_df,  # DataFrame containing state information
+        item_user_scores=recsys_df,  # Precomputed recommendation scores
+        true_users_by_product=true_user_df,  # Mapping of product IDs to true users
+        elasticity_df=elasticity_df,  # Price elasticity data
+        tau=1  # Optional parameter for reward scaling
+    )
+
+    # Agent 초기화 및 불러오기
+    agent = HRLAgent(env, config)
+
+    # 학습
+    agent.train(num_epochs=100)
+
+# 실행
+if __name__ == "__main__":
+    main()
+
+
+
