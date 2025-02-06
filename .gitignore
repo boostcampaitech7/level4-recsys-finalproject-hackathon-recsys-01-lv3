@@ -4,3 +4,4 @@
 *.toml
 /scripts/eda/
 /src/data/MBGCN/
+/model_results/

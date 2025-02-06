@@ -2,9 +2,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import time
+import matplotlib.pyplot as plt
+import os
+
 from src.models.rl_models import Actor, Critic
 from src.utils.replay_buffer import ReplayBuffer
-import matplotlib.pyplot as plt
 
 
 # HRL 에이전트 정의
@@ -189,7 +192,6 @@ class HRLAgent:
 
         # 저장 경로 설정 (config에서 가져오기)
         save_path = self.config["training"]["save_path"]
-        import os
         os.makedirs(save_path, exist_ok=True)  # 경로가 없으면 생성
 
         reward_history = []
@@ -200,7 +202,11 @@ class HRLAgent:
         plt.ion()  # Interactive 모드 활성화
         fig, ax = plt.subplots(3, 1, figsize=(10, 12))
 
+        start_time = time.time()  # 전체 학습 시작 시간
+
         for epoch in range(num_epochs):
+            epoch_start_time = time.time()
+
             state_high = self.env.reset()  # 초기 상태
             done = False
             episode_reward = 0
@@ -245,11 +251,11 @@ class HRLAgent:
                     (low_critic_losses, low_actor_loss) = self.train_low_policy()
                 
                     if low_critic_losses is not None:
-                        low_policy_critic_loss_history.append(low_critic_losses[0])  # Critic1 Loss 기록
-                        low_policy_critic_loss_history.append(low_critic_losses[1])  # Critic2 Loss 기록
+                        low_policy_critic_loss_history.append(low_critic_losses[0].cpu().item() if torch.is_tensor(low_critic_losses[0]) else low_critic_losses[0])
+                        low_policy_critic_loss_history.append(low_critic_losses[1].cpu().item() if torch.is_tensor(low_critic_losses[1]) else low_critic_losses[1])
                     
                     if low_actor_loss is not None:
-                        low_policy_actor_loss_history.append(low_actor_loss)  # Actor Loss 기록
+                        low_policy_actor_loss_history.append(low_actor_loss.cpu().item() if torch.is_tensor(low_actor_loss) else low_actor_loss)
 
                 # 주기적 High-Level Policy 갱신
                 step_count += 1
@@ -264,7 +270,7 @@ class HRLAgent:
             if len(self.replay_buffer.buffer_high) >= self.batch_size:
                 high_loss = self.train_high_policy()
                 if high_loss is not None:
-                    high_policy_loss_history.append(high_loss)
+                    high_policy_loss_history.append(high_loss.cpu().item() if torch.is_tensor(high_loss) else high_loss)
 
             # 최고 보상 갱신 및 모델 저장
             if episode_reward > best_reward:
@@ -283,33 +289,45 @@ class HRLAgent:
             self.noise_scale = max(self.noise_min, self.noise_scale * self.decay)
 
             reward_history.append(episode_reward)
+            epoch_end_time = time.time()
+            epoch_duration = epoch_end_time - epoch_start_time
 
-            print(f"Epoch {epoch + 1}/{num_epochs} - Total Reward: {episode_reward:.2f}, Epsilon: {self.epsilon:.4f}")
+            total_elapsed_time = epoch_end_time - start_time
+            estimated_total_time = (total_elapsed_time / (epoch + 1)) * num_epochs
+            remaining_time = estimated_total_time - total_elapsed_time
 
-            # 실시간 그래프 업데이트
-            ax[0].clear()
-            ax[0].plot(reward_history, label="Reward")
-            ax[0].set_title("Reward History")
-            ax[0].set_xlabel("Epoch")
-            ax[0].set_ylabel("Reward")
-            ax[0].legend()
+            progress_percentage = ((epoch + 1) / num_epochs) * 100
 
-            ax[1].clear()
-            ax[1].plot(high_policy_loss_history, label="High-Level Loss")
-            ax[1].set_title("High-Level Loss History")
-            ax[1].set_xlabel("Epoch")
-            ax[1].set_ylabel("Loss")
-            ax[1].legend()
+            print(f"Epoch {epoch + 1}/{num_epochs} - Total Reward: {episode_reward:.2f}, "
+                f"Epsilon: {self.epsilon:.4f}, "
+                f"Epoch Duration: {epoch_duration:.2f}s, "
+                f"Progress: {progress_percentage:.2f}%, "
+                f"Remaining Time: {remaining_time / 60:.2f} minutes")
+            
+        #     # 실시간 그래프 업데이트
+        #     ax[0].clear()
+        #     ax[0].plot(reward_history, label="Reward")
+        #     ax[0].set_title("Reward History")
+        #     ax[0].set_xlabel("Epoch")
+        #     ax[0].set_ylabel("Reward")
+        #     ax[0].legend()
 
-            ax[2].clear()
-            ax[2].plot(low_policy_actor_loss_history, label="Low-Level Actor Loss")
-            ax[2].plot(low_policy_critic_loss_history, label="Low-Level Critic Loss")
-            ax[2].set_title("Low-Level Loss History")
-            ax[2].set_xlabel("Epoch")
-            ax[2].set_ylabel("Loss")
-            ax[2].legend()
+        #     ax[1].clear()
+        #     ax[1].plot(high_policy_loss_history, label="High-Level Loss")
+        #     ax[1].set_title("High-Level Loss History")
+        #     ax[1].set_xlabel("Epoch")
+        #     ax[1].set_ylabel("Loss")
+        #     ax[1].legend()
 
-            plt.pause(0.01)  # 그래프 업데이트 대기 시간
+        #     ax[2].clear()
+        #     ax[2].plot(low_policy_actor_loss_history, label="Low-Level Actor Loss")
+        #     ax[2].plot(low_policy_critic_loss_history, label="Low-Level Critic Loss")
+        #     ax[2].set_title("Low-Level Loss History")
+        #     ax[2].set_xlabel("Epoch")
+        #     ax[2].set_ylabel("Loss")
+        #     ax[2].legend()
 
-        plt.ioff()  # Interactive 모드 종료
-        plt.show()
+        #     plt.pause(0.01)  # 그래프 업데이트 대기 시간
+
+        # plt.ioff()  # Interactive 모드 종료
+        # plt.show()
