@@ -9,3 +9,10 @@
 *.pyc
 poetry.lock
 pyproject.toml
+*.html
+*.parquet
+*.csv
+*.tar
+*.tar.gz
+*.png
+*.json
