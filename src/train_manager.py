@@ -96,7 +96,7 @@ class TrainManager:
         self.model.eval()
         # if self.args.model == "MBGCN":
         #     self.model.encode()
-        k_values = [10, 20, 40]
+        k_values = [20, 40, 80]
         recall_metrics = {k: Recall(topk=k) for k in k_values}
         ndcg_metrics = {k: NDCG(topk=k) for k in k_values}
         
@@ -127,20 +127,20 @@ class TrainManager:
                     recall_metrics[k].update(hits)
                     
                     batch_size = user_ids.size(0)
-                    ndcg_vals = torch.zeros(batch_size, device=self.device)
-                    # 각 사용자별로 첫 hit의 rank를 계산
-                    for i in range(batch_size):
-                        # ground_truth.gather(1, topk_items[i].unsqueeze(1)) => (k,1), squeeze => (k,)
-                        rel = ground_truth[i].gather(0, topk_items[i])
-                        nonzero = (rel > 0).nonzero(as_tuple=False)
-                        if nonzero.numel() > 0:
-                            rank = nonzero[0].item() + 1  # 1-based rank
-                            ndcg_vals[i] = 1.0 / np.log2(rank + 1)
-                    ndcg_metrics[k].update(ndcg_vals)
+                    # ndcg_vals = torch.zeros(batch_size, device=self.device)
+                    # # 각 사용자별로 첫 hit의 rank를 계산
+                    # for i in range(batch_size):
+                    #     # ground_truth.gather(1, topk_items[i].unsqueeze(1)) => (k,1), squeeze => (k,)
+                    #     rel = ground_truth[i].gather(0, topk_items[i])
+                    #     nonzero = (rel > 0).nonzero(as_tuple=False)
+                    #     if nonzero.numel() > 0:
+                    #         rank = nonzero[0].item() + 1  # 1-based rank
+                    #         ndcg_vals[i] = 1.0 / np.log2(rank + 1)
+                    # ndcg_metrics[k].update(ndcg_vals)
         metrics = {}
         for k in k_values:
             metrics[f"Recall@{k}"] = recall_metrics[k].compute()
-            metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
+            # metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
         return metrics
     
     def _evaluate_loader_train(self, loader):
@@ -174,7 +174,7 @@ class TrainManager:
         metrics = {}
         for k in k_values:
             metrics[f"Recall@{k}"] = recall_metrics[k].compute()
-            metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
+            # metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
         return metrics
     
     def train_epoch(self):
@@ -214,10 +214,38 @@ class TrainManager:
         avg_loss = total_loss / len(self.train_loader)
         return avg_loss
     
+    def train_total_epoch(self, total_loader):
+        """
+        전체 데이터셋(total.txt)로 한 epoch 학습하는 메서드.
+        TotalTrainDataset에서 (user, (pos_item, neg_item)) 쌍을 반환하므로,
+        기존의 train_epoch와 동일한 방식으로 loss를 계산할 수 있습니다.
+        """
+        self.model.train()
+        total_loss = 0.0
+        progress = tqdm(total_loader, desc=Fore.YELLOW + "Retraining on Total", ncols=80)
+        for batch in progress:
+            self.optimizer.zero_grad()
+            user_ids = batch[0].squeeze().to(self.device).view(-1)  # shape: [batch_size]
+            pos_neg = batch[1].to(self.device)  # shape: [batch_size, 2] (첫 원소: positive, 두 번째: negative)
+            pos_item_ids = pos_neg[:, 0].view(-1, 1)
+            neg_item_ids = pos_neg[:, 1].view(-1, 1)
+            
+            pos_scores, pos_L2 = self.model(user_ids, pos_item_ids)
+            neg_scores, neg_L2 = self.model(user_ids, neg_item_ids)
+            
+            loss = bpr_loss(pos_scores, neg_scores, pos_L2, neg_L2, self.args.train_batch_size, self.args.L2_norm)
+            loss.backward()
+            self.optimizer.step()
+            total_loss += loss.item()
+            progress.set_postfix({"Loss": f"{loss.item():.4f}"})
+        avg_loss = total_loss / len(total_loader)
+        return avg_loss
+    
     def train(self):
         best_recall = -float('inf')
         patience_count = 0
         best_state = None
+        best_epoch = 0  # best model이 업데이트된 epoch 번호
 
         print(Fore.CYAN + Style.BRIGHT + ">>> Start training ...")
         for epoch in range(1, self.args.epoch + 1):
@@ -237,6 +265,7 @@ class TrainManager:
             if valid_metrics["Recall@40"] > best_recall:
                 best_recall = valid_metrics["Recall@40"]
                 best_state = {k: v.clone().cpu() for k, v in self.model.state_dict().items()}
+                best_epoch = epoch
                 patience_count = 0
             else:
                 patience_count += 1
@@ -252,16 +281,41 @@ class TrainManager:
         for k in sorted(final_test_metrics.keys()):
             print(f"{k}: {final_test_metrics[k]:.4f}")
         
-        # 모델 저장: 최종 테스트 평가 이후에 모델을 저장합니다.
-        # 예를 들어, self.args.save_dir 경로에 best_model.pth 파일로 저장
+        # ---------- retraining on 전체 데이터셋(total.txt) ----------
+        # TotalTrainDataset을 사용하여 전체 데이터셋으로부터 pos/neg 샘플을 생성
+        from src.data.dataset import TotalTrainDataset  # TotalTrainDataset 클래스를 import
+        total_train_dataset = TotalTrainDataset(
+            data_path=self.args.data_path,
+            dataset_name=self.args.dataset_name,
+            relations=self.args.relations,
+            neg_sample_size=2,
+            debug_sample=False
+        )
+        total_train_loader = DataLoader(
+            total_train_dataset,
+            batch_size=self.args.train_batch_size,
+            shuffle=True,
+            num_workers=4
+        )
+        print(Fore.CYAN + Style.BRIGHT + f">>> Retraining on total dataset for {best_epoch} epochs ...")
+        # retraining 단계에서는 기존 best model을 초기값으로 사용하고, best_epoch 만큼 학습합니다.
+        for epoch in range(1, best_epoch + 1):
+            start_time = time.time()
+            train_loss = self.train_total_epoch(total_train_loader)
+            epoch_time = time.time() - start_time
+            log = (f"{Fore.WHITE}{Style.BRIGHT}[Retrain] Epoch {epoch:03d}/{best_epoch:03d} | "
+                   f"{Fore.YELLOW}Train Loss: {train_loss:.6f} | {Fore.MAGENTA}Time: {epoch_time:.2f}s")
+            print(log)
+        # retraining 종료 후 최종 모델 저장 (예: total_model.pth)
         save_path = self.args.save_path
         os.makedirs(save_path, exist_ok=True)
-        save_dir = os.path.join(save_path, "best_model.pth")
-        torch.save(self.model.state_dict(), save_dir)
-        print(Fore.GREEN + Style.BRIGHT + f">>> Model saved at {save_dir}")
+        total_save_dir = os.path.join(save_path, "total_model.pth")
+        torch.save(self.model.state_dict(), total_save_dir)
+        print(Fore.GREEN + Style.BRIGHT + f">>> Retrained model saved at {total_save_dir}")
 
         # 최종 평가 지표(예: Recall@40)를 반환하도록 수정
         return final_test_metrics["Recall@40"]
+    
 
         
         

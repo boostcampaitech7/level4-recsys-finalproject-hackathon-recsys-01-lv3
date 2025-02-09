@@ -3,25 +3,22 @@ import polars as pl
 import numpy as np
 
 class DynamicPricingEnv:
-    def __init__(self, df: pl.DataFrame, item_user_scores, true_users_by_product, elasticity_df, tau=1):
+    def __init__(self, df: pl.DataFrame, item_user_scores, elasticity_df, raw_df):
         """
         Initialize the Dynamic Pricing Environment.
         """
         self.df = df
         self.current_day_idx = 0
         self.item_user_scores = item_user_scores
-        self.true_users_by_product = true_users_by_product
         self.elasticity_df = elasticity_df
-        self.tau = tau
+        self.raw_df = raw_df
 
         min_price = elasticity_df["price_bucket"].min()
         max_price = elasticity_df["price_bucket"].max()
         self.PRICE_BUCKETS = np.linspace(min_price, max_price, num=21)
 
-        self.fixed_action1 = None  # 고정된 action1 값
-
         self.price_action_space = np.linspace(-0.3, 0.0, num=7)  # 가격 조정 범위: [-0.3, -0.25, ..., 0.0]
-        self.top_k_action_space = range(1, 100001)  # 추천 사용자 수 범위
+        self.top_k_action_space = range(1, 10001)  # 추천 사용자 수 범위
         self.continuous_columns = ["price"]
         self.extend_columns = ["item_id", "category_id_encoded", "brand_id"]
 
@@ -108,14 +105,14 @@ class DynamicPricingEnv:
         product_id = int(current_row["item_id"])
 
         current_price_bucket = self._get_price_bucket(current_price)
-        elasticity = self.elasticity_df.filter(pl.col("price_bucket") == current_price_bucket)["smoothed_elasticity"].to_numpy()[0]
+        elasticity = self.elasticity_df.filter(pl.col("price_bucket") == current_price_bucket)["elasticity"].to_numpy()[0]
 
         # 가격 조정 및 수요량 계산
         next_price = max(0, current_price * (1 + price_action))
         demand_change_rate = (1 + (elasticity * price_action))
 
         # Precision at K 계산
-        true_users = self.get_true_users(product_id)
+        true_users = self.get_true_users(product_id, next_price)
         precision_at_k_value = self.precision_at_k(product_id, true_users, top_k=int(top_k_action))
 
         # RecSys Value 계산 (추천 시스템 관련 매출)
@@ -145,8 +142,8 @@ class DynamicPricingEnv:
         :return: RecSys Value (추천 시스템 관련 매출)
         """
         demand = int(round(precision_at_k * int(top_k_action) * next_demand))
-        marketing_cost = 0.1 * int(top_k_action)  # 마케팅 비용
-        recsys_value = (next_price * demand) - marketing_cost
+        marketing_cost = (next_price * 0.01) * int(top_k_action)  # 마케팅 비용
+        recsys_value = ((next_price * demand) - marketing_cost)
         return recsys_value
     
     def _get_price_bucket(self, price):
@@ -161,13 +158,26 @@ class DynamicPricingEnv:
         
         return self.PRICE_BUCKETS[-1]  # 마지막 구간 처리
 
-    def get_true_users(self, product_id):
+    def get_true_users(self, product_id, next_price):
         """
         주어진 product_id에 대해 상호작용한 실제 사용자 리스트 반환.
         :param product_id: 상품 ID.
-        :return: 해당 상품과 상호작용한 사용자 ID 리스트.
+        :param next_price: 다음 가격 (필터 기준).
+        :return: 다음 가격보다 낮은 가격으로 구매한 사용자 ID 리스트.
         """
-        return self.true_users_by_product.get(product_id, [])
+        # Get all true users for the given product_id
+        # true_users = self.true_users_by_product.get(product_id, [])
+
+        user_data = self.raw_df.filter(pl.col("item_id") == product_id)
+
+
+        # Filter users based on the next_price condition
+        filtered_users = (
+            user_data.filter(pl.col("price") >= next_price)["user_id"]
+            .unique()
+            .to_list()
+        )
+        return filtered_users
         
     def recommend_users(self, product_id, top_k):
         """
@@ -208,5 +218,5 @@ class DynamicPricingEnv:
         :param recsys_value: 추천 시스템이 기여한 매출 가치.
         :return: 하위 계층 보상 값.
         """
-        reward = recsys_value / 1000  # 정규화된 추천 시스템 가치
+        reward = recsys_value # 정규화된 추천 시스템 가치 (현재 사용 안함.)
         return reward

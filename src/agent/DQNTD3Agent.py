@@ -59,7 +59,6 @@ class HRLAgent:
         self.epsilon_min = config["high_policy"]["epsilon_min"]
         self.decay = config["high_policy"]["epsilon_decay"]
 
-
         # 학습 스텝 초기화 (TD3에서 Actor 지연 업데이트용)
         self.train_step = 0
 
@@ -87,8 +86,9 @@ class HRLAgent:
         # 탐험을 위한 가우시안 노이즈 추가
         noise = np.random.normal(0, self.noise_scale, size=action_continuous.shape)
         action_noisy = action_continuous + noise
-        # 행동을 [1, 100000] 범위로 스케일링하고 정수화
-        return int(np.clip(action_noisy[0][0] * 100000.0, 1, 100000))
+        # 행동을 [1, 10000] 범위로 스케일링하고 정수화
+        scaled_action = (action_noisy[0][0] + 1) / 2 * (10000 - 1) + 1
+        return int(np.clip(scaled_action, 1, 10000))
 
     def train_high_policy(self):
         """High-Level Policy 학습 (DQN 사용)."""
@@ -115,7 +115,7 @@ class HRLAgent:
         current_q_values = self.high_policy(states_tensor).gather(1, actions_tensor.unsqueeze(-1)).squeeze(-1)
 
         # 손실 계산 및 네트워크 업데이트
-        loss = nn.MSELoss()(current_q_values, target_q_values)
+        loss = nn.SmoothL1Loss()(current_q_values, target_q_values)
 
         self.high_optimizer.zero_grad()
         loss.backward()
@@ -149,8 +149,8 @@ class HRLAgent:
         q1_predicted = self.low_critic_1(states_tensor, actions_tensor)
         q2_predicted = self.low_critic_2(states_tensor, actions_tensor)
 
-        critic_loss_1 = nn.MSELoss()(q1_predicted, q_target.detach())
-        critic_loss_2 = nn.MSELoss()(q2_predicted, q_target.detach())
+        critic_loss_1 = nn.SmoothL1Loss()(q1_predicted, q_target.detach())
+        critic_loss_2 = nn.SmoothL1Loss()(q2_predicted, q_target.detach())
 
         self.low_critic_optimizer_1.zero_grad()
         critic_loss_1.backward()
@@ -181,7 +181,7 @@ class HRLAgent:
         return (critic_loss_1.item(), critic_loss_2.item()), actor_loss
 
 
-    def train(self, num_epochs=1000):
+    def train(self, num_episodes=1000, warm_up = 10):
         """
         HRL 에이전트 학습 루프.
         
@@ -204,8 +204,8 @@ class HRLAgent:
 
         start_time = time.time()  # 전체 학습 시작 시간
 
-        for epoch in range(num_epochs):
-            epoch_start_time = time.time()
+        for episode in range(num_episodes):
+            episode_start_time = time.time()
 
             state_high = self.env.reset()  # 초기 상태
             done = False
@@ -223,11 +223,14 @@ class HRLAgent:
                 state_low = np.concatenate([state_high, [price_action]])
 
                 # Low-Level Policy로 추천 사용자 수(top_k) 액션 선택
-                top_k_action = self.select_low_action(state_low)
+                if 0 < episode < warm_up:
+                    top_k_action = np.random.randint(1,10001)
+                else:
+                    top_k_action = self.select_low_action(state_low)
+                    if episode == 0 and first_sample == 1:
+                        print(f"First Sample : {top_k_action}")
+                        first_sample -= 1
 
-                if first_sample == 1 and epoch == 0:
-                    print(top_k_action)
-                    first_sample -= 1
 
                 # 환경과 상호작용하여 다음 상태 및 보상 획득
                 next_state_env, reward, done = self.env.step((price_action, top_k_action))
@@ -240,11 +243,11 @@ class HRLAgent:
                 ])
 
                 # Replay Buffer에 경험 저장
-                if 1 < top_k_action < 100000:
-                    self.replay_buffer.add_high(state_high, price_action_idx, reward / 1000.0,
+                if 1 < top_k_action < 10000:
+                    self.replay_buffer.add_high(state_high, price_action_idx, reward,
                                                 next_state_env if next_state_env is not None else np.zeros_like(state_high))
-                    self.replay_buffer.add_low(state_low, top_k_action / 100000.0,
-                                                reward / 1000.0, next_state_low)
+                    self.replay_buffer.add_low(state_low, top_k_action / 10000.0,
+                                                reward, next_state_low)
 
                 # Low-Level Policy 학습
                 if len(self.replay_buffer.buffer_low) >= self.batch_size:
@@ -274,60 +277,33 @@ class HRLAgent:
 
             # 최고 보상 갱신 및 모델 저장
             if episode_reward > best_reward:
-                best_reward = episode_reward
-                print(f"New best reward: {best_reward:.2f}. Saving models...")
+                best_reward = episode_reward 
+                print(f". Saving models..New best reward: {best_reward:.2f}.")
 
-                # 상위 정책 모델 저장
-                torch.save(self.high_policy.state_dict(), os.path.join(save_path, 'best_high_policy.pth'))
+            # 상위 정책 모델 저장
+            torch.save(self.high_policy.state_dict(), os.path.join(save_path, 'best_high_policy.pth'))
 
-                # 하위 정책 모델 저장 (Actor와 Critic 모두)
-                torch.save(self.low_actor.state_dict(), os.path.join(save_path, 'best_low_actor.pth'))
-                torch.save(self.low_critic_1.state_dict(), os.path.join(save_path, 'best_low_critic_1.pth'))
-                torch.save(self.low_critic_2.state_dict(), os.path.join(save_path, 'best_low_critic_2.pth'))
+            # 하위 정책 모델 저장 (Actor와 Critic 모두)
+            torch.save(self.low_actor.state_dict(), os.path.join(save_path, 'best_low_actor.pth'))
+            torch.save(self.low_critic_1.state_dict(), os.path.join(save_path, 'best_low_critic_1.pth'))
+            torch.save(self.low_critic_2.state_dict(), os.path.join(save_path, 'best_low_critic_2.pth'))
 
-            self.epsilon = max(self.epsilon_min, self.epsilon * self.decay)
-            self.noise_scale = max(self.noise_min, self.noise_scale * self.decay)
+            if warm_up < episode:
+                self.epsilon = max(self.epsilon_min, self.epsilon * self.decay)
+                self.noise_scale = max(self.noise_min, self.noise_scale * self.decay)
 
             reward_history.append(episode_reward)
-            epoch_end_time = time.time()
-            epoch_duration = epoch_end_time - epoch_start_time
+            episode_end_time = time.time()
+            episode_duration = episode_end_time - episode_start_time
 
-            total_elapsed_time = epoch_end_time - start_time
-            estimated_total_time = (total_elapsed_time / (epoch + 1)) * num_epochs
+            total_elapsed_time = episode_end_time - start_time
+            estimated_total_time = (total_elapsed_time / (episode + 1)) * num_episodes
             remaining_time = estimated_total_time - total_elapsed_time
 
-            progress_percentage = ((epoch + 1) / num_epochs) * 100
+            progress_percentage = ((episode + 1) / num_episodes) * 100
 
-            print(f"Epoch {epoch + 1}/{num_epochs} - Total Reward: {episode_reward:.2f}, "
+            print(f"Episode {episode + 1}/{num_episodes} - Total Reward: {episode_reward:.2f}, "
                 f"Epsilon: {self.epsilon:.4f}, "
-                f"Epoch Duration: {epoch_duration:.2f}s, "
+                f"Episode Duration: {episode_duration:.2f}s, "
                 f"Progress: {progress_percentage:.2f}%, "
                 f"Remaining Time: {remaining_time / 60:.2f} minutes")
-            
-        #     # 실시간 그래프 업데이트
-        #     ax[0].clear()
-        #     ax[0].plot(reward_history, label="Reward")
-        #     ax[0].set_title("Reward History")
-        #     ax[0].set_xlabel("Epoch")
-        #     ax[0].set_ylabel("Reward")
-        #     ax[0].legend()
-
-        #     ax[1].clear()
-        #     ax[1].plot(high_policy_loss_history, label="High-Level Loss")
-        #     ax[1].set_title("High-Level Loss History")
-        #     ax[1].set_xlabel("Epoch")
-        #     ax[1].set_ylabel("Loss")
-        #     ax[1].legend()
-
-        #     ax[2].clear()
-        #     ax[2].plot(low_policy_actor_loss_history, label="Low-Level Actor Loss")
-        #     ax[2].plot(low_policy_critic_loss_history, label="Low-Level Critic Loss")
-        #     ax[2].set_title("Low-Level Loss History")
-        #     ax[2].set_xlabel("Epoch")
-        #     ax[2].set_ylabel("Loss")
-        #     ax[2].legend()
-
-        #     plt.pause(0.01)  # 그래프 업데이트 대기 시간
-
-        # plt.ioff()  # Interactive 모드 종료
-        # plt.show()

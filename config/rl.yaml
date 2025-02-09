@@ -1,13 +1,13 @@
 # 실험 설정 파일
 general:
   device: "cuda"
-  batch_size: 128
-  gamma: 0.99
+  batch_size: 256
+  gamma: 0.9
   tau: 0.005
 
 high_policy:
   learning_rate: 0.0003
-  epsilon_start: 0.9
+  epsilon_start: 1.0
   epsilon_min: 0.1
   epsilon_decay: 0.995
 

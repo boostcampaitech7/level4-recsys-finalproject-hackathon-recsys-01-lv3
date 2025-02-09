@@ -11,10 +11,9 @@ from src.data.preprocess_for_rl.data_preprocess import PreprocessRL
 import yaml
 import polars as pl
 
-
 DATA_PATH = "/data/ephemeral/home/Hackathon/data/final_purchase_df.parquet"
 CONFIG = "/data/ephemeral/home/Hackathon/config/rl.yaml"
-REC_PATH = "/data/ephemeral/home/Hackathon/scripts/eda/item_topk.pkl"
+REC_PATH = "/data/ephemeral/home/Hackathon/data/item_topk.pkl"
 
 def main():
     # 설정 파일 로드
@@ -32,20 +31,20 @@ def main():
     elasticity_calculator = ElasticityCalculator(df)
     elasticity_df = elasticity_calculator.run()
     print("가격 탄력성 계산 완료.")
-    train_df = preprocess.make_train_df()
+    train_df = preprocess.make_train_df(random=True)
     print("학습 데이터 전처리 완료.")
     recsys_df = preprocess.load_recsys()
     print("추천시스템 결과 불러오기 완료.")
-    true_user_df = preprocess.true_user_df()
-    print("실제 구매 유저 데이터 전처리 완료.")
+
+    # true_user_df = preprocess.true_user_df()
+    # print("실제 구매 유저 데이터 전처리 완료.")
 
     # 환경 불러오기
     env = DynamicPricingEnv(
         df=train_df,  # DataFrame containing state information
         item_user_scores=recsys_df,  # Precomputed recommendation scores
-        true_users_by_product=true_user_df,  # Mapping of product IDs to true users
         elasticity_df=elasticity_df,  # Price elasticity data
-        tau=1  # Optional parameter for reward scaling
+        raw_df=df
     )
     print("강화학습 MDP 환경 초기화 및 불러오기 완료.")
 
@@ -55,11 +54,8 @@ def main():
 
     print("학습 시작")
     # 학습
-    agent.train(num_epochs=100)
+    agent.train(num_episodes=500, warm_up=50)
 
 # 실행
 if __name__ == "__main__":
     main()
-
-
-

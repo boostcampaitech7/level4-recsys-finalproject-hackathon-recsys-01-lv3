@@ -89,5 +89,6 @@ class ElasticityCalculator:
         self.calculate_average_demand()
         self.calculate_elasticity()
         self.smooth_elasticity()
+
         
         return self.elasticity_df

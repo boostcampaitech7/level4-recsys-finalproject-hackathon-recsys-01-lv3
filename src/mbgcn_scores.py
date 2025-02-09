@@ -10,7 +10,7 @@ from src.models.mbgcn2 import MBGCN
 from src.data.dataset import TrainDataset, TestDataset
 from torch.utils.data import DataLoader
 
-def score_prep(model_path="MBGCN_lr1e-4_L21e-4_dim128", eval_batch_size=16384):
+def score_prep(model_path="MBGCN_lr3e-5_L21e-4_dim128", eval_batch_size=16384):
     print(Fore.CYAN + Style.BRIGHT + ">>> Loading Dataset & Model ...")
     project_root = os.path.join(os.path.expanduser("~"), "Hackathon")
     DATA_PATH = os.path.join(project_root, "src", "data", "MBGCN")
@@ -65,13 +65,13 @@ def score_prep(model_path="MBGCN_lr1e-4_L21e-4_dim128", eval_batch_size=16384):
     # num_user, num_items 계산
     num_users, num_items = total_dataset.num_users, total_dataset.num_items
     
-    save_path = os.path.join(SAVE_PATH, model_path, "best_model.pth")
+    save_path = os.path.join(SAVE_PATH, model_path, "total_model.pth")
     state_dict = torch.load(save_path, map_location=torch.device(DEVICE), weights_only=True)
     model = MBGCN(args, train_dataset, device=DEVICE)
     model.load_state_dict(state_dict)
     return model, total_loader, num_items, num_users, DEVICE
 
-def mbgcn_scores_version_A(model_path="MBGCN_lr1e-4_L21e-4_dim128", eval_batch_size=16384, topk=100_000):
+def mbgcn_scores_version_A(model_path="MBGCN_lr3e-5_L21e-4_dim128", eval_batch_size=16384, topk=100_000):
     """
     버전 B: topk_scores는 CPU, topk_users는 GPU에서 유지.
     """
@@ -133,7 +133,7 @@ def mbgcn_scores_version_A(model_path="MBGCN_lr1e-4_L21e-4_dim128", eval_batch_s
     
     return item_topk_dict
 
-def mbgcn_scores_version_B(model_path="MBGCN_lr1e-4_L21e-4_dim128", eval_batch_size=16384, topk=10_000):
+def mbgcn_scores_version_B(model_path="MBGCN_lr3e-5_L21e-4_dim128", eval_batch_size=16384, topk=10_000):
     # 버전 A: topk_scores (부동소수점 텐서)와 topk_users 모두 GPU에 할당
     model, total_loader, num_items, num_users, DEVICE = score_prep(model_path, eval_batch_size)
     gc.collect()

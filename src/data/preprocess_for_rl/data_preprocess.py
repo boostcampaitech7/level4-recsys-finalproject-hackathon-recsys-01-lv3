@@ -9,10 +9,9 @@ class PreprocessRL:
     def __init__(self, df, recsyspath):
         self.df = df
         self.recsyspath = recsyspath
-        self.random = False
         self.encoder = LabelEncoder()
 
-    # 실제 구매 고객 생성
+    # 실제 구매 고객 생성 (현재 사용 안함)
     def true_user_df(self):
         grouped = self.df.group_by("item_id").agg(pl.col("user_id").unique())
 
@@ -27,11 +26,15 @@ class PreprocessRL:
             return pickle.load(f)
     
     # 학습 데이터 전처리
-    def make_train_df(self):
-        train_df = self.df.with_columns(pl.col("category_id"), pl.Series("category_id_encoded", self.encoder.fit_transform(self.df["category_id"].to_numpy())))
-        train_df = train_df.select(["item_id", "price", "category_id_encoded", "brand_id"]).unique()
+    def make_train_df(self, random=False):
+        category_encoded_df = self.df.with_columns(pl.col("category_id"), pl.Series("category_id_encoded", self.encoder.fit_transform(self.df["category_id"].to_numpy())))
+        filtered_top = category_encoded_df.group_by("item_id").agg(
+            pl.count().alias("num_count")
+        ).filter((pl.col("num_count") >= 500) & (pl.col("num_count") <= 5000))
+        merged_df = filtered_top.join(category_encoded_df, on="item_id", how="left")
+        train_df = merged_df.select(["item_id", "price", "category_id_encoded", "brand_id"]).unique()
 
-        if self.random == True:
+        if random == True:
             train_df = train_df.sample(n=len(train_df), seed=np.random.randint(0, 10000))
 
         return train_df

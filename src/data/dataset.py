@@ -4,7 +4,6 @@ import torch
 import numpy as np
 import scipy.sparse as sp
 from torch.utils.data import Dataset
-from tqdm import tqdm
 
 class TrainDataset(Dataset):
     def __init__(
@@ -178,7 +177,7 @@ class TrainDataset(Dataset):
         """
         A big matrix for GCN => sum of all training edges?
         Actually old code uses only train.txt => sp matrix
-        """                  
+        """
         txt_file = os.path.join(self.path, self.name, "train.txt")
         index = []
         with open(txt_file, 'r') as f:
@@ -203,30 +202,6 @@ class TrainDataset(Dataset):
             size=(self.num_users, self.num_items)
         )
         self.train_matrix = sp_tensor.coalesce()
-        
-    # def _read_train_data(self, i):
-    #     """
-    #     read sample_file/sampe_{i}.txt => user, pos_item, neg_item
-    #     store in self.train_tmp => shape=(N, 3)
-    #     """
-    #     sample_dir = os.path.join(self.path, self.name, 'sample_file')
-    #     sample_file = os.path.join(sample_dir, f'sample_{i}.txt')
-    #     if not os.path.exists(sample_file):
-    #         print(f"[WARNING] {sample_file} not found => maybe no negative sampling? empty.")
-    #         self.train_tmp = torch.zeros((0,3), dtype=torch.long)
-    #         return
-    #     tmp_array = []
-    #     with open(sample_file, 'r') as f:
-    #         lines = f.readlines()
-    #         for row in lines:
-    #             user_str, pid_str, nid_str = row.strip().split()
-    #             user, pid, nid = int(user_str), int(pid_str), int(nid_str)
-    #             tmp_array.append([user, pid, nid])
-    #     if len(tmp_array)==0:
-    #         self.train_tmp = torch.zeros((0,3), dtype=torch.long)
-    #     else:
-    #         self.train_tmp = torch.LongTensor(tmp_array)
-    #     print(f"[INFO] Read Epoch {i} Train Data => shape={self.train_tmp.shape}")
     
     def _build_user_positive(self):
         """
@@ -307,6 +282,7 @@ class TrainDataset(Dataset):
         """
         return len(self.checkins)
     
+
 class TestDataset(Dataset):
     def __init__(
         self,
@@ -360,3 +336,223 @@ class TestDataset(Dataset):
     
     def __len__(self):
         return self.num_users
+    
+# === TotalTrainDataset: 총 데이터셋용 학습 데이터셋 ===
+class TotalTrainDataset(Dataset):
+    """
+    독립적으로 구현한 총 데이터셋 학습용 데이터셋.
+    - 전체 상호작용 파일: total.txt
+    - 각 behavior 파일: r+"_total.txt"
+    - 아이템 그래프: item/item_{r}_total.pth
+    """
+    def __init__(
+        self, 
+        data_path: str,
+        dataset_name: str,
+        relations: str="buy,cart,click,collect",
+        neg_sample_size: int = 1,
+        debug_sample: bool = False
+    ):
+        super().__init__()
+        self.path = data_path
+        self.name = dataset_name
+        self.neg_sample_size = neg_sample_size
+        self.debug_sample = debug_sample
+        self._decode_relation(relations)
+        self._load_size()
+        self._create_relation_matrix()
+        self._calculate_user_behavior()
+        self._generate_ground_truth()
+        self._generate_train_matrix()
+        self._load_item_graph()
+        self._build_user_positive()
+        self._build_item_sampling_distribution()
+
+    def _decode_relation(self, relations_str: str):
+        # 예: "cart,view" -> ["cart", "view"]
+        self.relation = relations_str.split(",")
+
+    def _load_size(self):
+        # data_size.txt 파일에서 user, item 수 읽기
+        size_file = os.path.join(self.path, self.name, "data_size_total.txt")
+        with open(size_file, 'r') as f:
+            line = f.readline().strip()
+            user_num_str, item_num_str = line.split()
+            self.num_users = int(user_num_str)
+            self.num_items = int(item_num_str)
+
+    def _create_relation_matrix(self):
+        """
+        각 behavior의 총 상호작용 파일(r+"_total.txt")을 읽어 sparse tensor 생성.
+        """
+        self.relation_dict = {}
+        for r in self.relation:
+            txt_file = os.path.join(self.path, self.name, r + "_total.txt")
+            if not os.path.exists(txt_file):
+                print(f"[WARNING] {txt_file} not found => create empty matrix.")
+                mat_empty = torch.sparse_coo_tensor(
+                    torch.zeros((2, 0), dtype=torch.long),
+                    torch.zeros((0,), dtype=torch.float),
+                    size=(self.num_users, self.num_items)
+                )
+                self.relation_dict[r] = mat_empty
+                continue
+            index = []
+            with open(txt_file, 'r') as f:
+                lines = f.readlines()
+                for row in lines:
+                    parts = row.strip().split()
+                    if len(parts) < 2:
+                        continue
+                    user_str, item_str = parts[:2]
+                    user, item = int(user_str), int(item_str)
+                    index.append([user, item])
+            if len(index) == 0:
+                self.relation_dict[r] = torch.sparse_coo_tensor(
+                    torch.zeros((2, 0), dtype=torch.long),
+                    torch.zeros((0,), dtype=torch.float),
+                    size=(self.num_users, self.num_items)
+                )
+                continue
+            index_tensor = torch.LongTensor(index)
+            lens = index_tensor.size(0)
+            ones = torch.ones(lens, dtype=torch.float)
+            sp_tensor = torch.sparse_coo_tensor(
+                index_tensor.t(),
+                ones,
+                size=(self.num_users, self.num_items)
+            )
+            self.relation_dict[r] = sp_tensor.coalesce()
+
+    def _calculate_user_behavior(self):
+        # 각 behavior별로 사용자 및 아이템의 상호작용 횟수 계산
+        user_behavior = None
+        item_behavior = None
+        for i, r in enumerate(self.relation):
+            sp_r = self.relation_dict[r]
+            dense_r = sp_r.to_dense()
+            user_sum = dense_r.sum(dim=1, keepdim=True)
+            item_sum = dense_r.t().sum(dim=1, keepdim=True)
+            if i == 0:
+                user_behavior = user_sum
+                item_behavior = item_sum
+            else:
+                user_behavior = torch.cat([user_behavior, user_sum], dim=1)
+                item_behavior = torch.cat([item_behavior, item_sum], dim=1)
+        self.user_behavior_degree = user_behavior
+        self.item_behavior_degree = item_behavior
+
+    def _generate_ground_truth(self):
+        # total.txt 파일을 읽어 ground truth (전체 상호작용) 구성
+        txt_file = os.path.join(self.path, self.name, "total.txt")
+        row_data = []
+        col_data = []
+        with open(txt_file, 'r') as f:
+            lines = f.readlines()
+            for row in lines:
+                parts = row.strip().split()
+                if len(parts) < 2:
+                    continue
+                u_str, i_str = parts[:2]
+                user, item = int(u_str), int(i_str)
+                row_data.append(user)
+                col_data.append(item)
+        row_data = np.array(row_data, dtype=np.int32)
+        col_data = np.array(col_data, dtype=np.int32)
+        values = np.ones(len(row_data), dtype=float)
+        self.ground_truth = sp.csr_matrix(
+            (values, (row_data, col_data)),
+            shape=(self.num_users, self.num_items)
+        )
+        self.checkins = np.column_stack([row_data, col_data])
+
+    def _generate_train_matrix(self):
+        # total.txt 파일을 사용하여 train matrix 구성 (GCN용)
+        txt_file = os.path.join(self.path, self.name, "total.txt")
+        index = []
+        with open(txt_file, 'r') as f:
+            lines = f.readlines()
+            for row in lines:
+                parts = row.strip().split()
+                if len(parts) < 2:
+                    continue
+                u_str, i_str = parts[:2]
+                user, item = int(u_str), int(i_str)
+                index.append([user, item])
+        if len(index) == 0:
+            self.train_matrix = torch.sparse_coo_tensor(
+                torch.zeros((2, 0), dtype=torch.long),
+                torch.zeros((0,), dtype=torch.float),
+                size=(self.num_users, self.num_items)
+            )
+            return
+        index_tensor = torch.LongTensor(index)
+        lens = index_tensor.size(0)
+        ones = torch.ones(lens, dtype=torch.float)
+        sp_tensor = torch.sparse_coo_tensor(
+            index_tensor.t(),
+            ones,
+            size=(self.num_users, self.num_items)
+        )
+        self.train_matrix = sp_tensor.coalesce()
+
+    def _load_item_graph(self):
+        """
+        각 behavior에 대해 item/item_{r}_total.pth 파일을 읽어 아이템 그래프 구성.
+        """
+        self.item_graph = {}
+        self.item_graph_degree = {}
+        for r in self.relation:
+            pth_path = os.path.join(self.path, self.name, "item", f"item_{r}_total.pth")
+            if not os.path.exists(pth_path):
+                print(f"[WARNING] {pth_path} not found => create zero matrix.")
+                self.item_graph[r] = torch.zeros(self.num_items, self.num_items, dtype=torch.int32)
+                self.item_graph_degree[r] = torch.zeros(self.num_items, 1, dtype=torch.float32)
+                continue
+            # map_location 추가: self.device가 없다면 기본적으로 CPU에서 로드
+            t = torch.load(pth_path, map_location="cpu", weights_only=True)
+            self.item_graph[r] = t
+            deg = t.sum(dim=1).float().unsqueeze(-1)
+            self.item_graph_degree[r] = deg
+
+    def _build_user_positive(self):
+        # 각 사용자별로 이미 상호작용한 아이템 집합 구성
+        self.user_positive = {}
+        gt = self.ground_truth
+        for user in range(self.num_users):
+            start = gt.indptr[user]
+            end = gt.indptr[user+1]
+            self.user_positive[user] = set(gt.indices[start:end])
+        if self.debug_sample:
+            print(f"[DEBUG] Built user_positive for {len(self.user_positive)} users.")
+
+    def _build_item_sampling_distribution(self):
+        freq = self.ground_truth.getnnz(axis=0).astype(np.float32)
+        freq_pow = np.power(freq, 0.75)
+        total = freq_pow.sum()
+        self.neg_prob = freq_pow / total
+        if self.debug_sample:
+            print(f"[DEBUG] Negative sampling: min={self.neg_prob.min():.6f}, max={self.neg_prob.max():.6f}")
+
+    def _sample_negative(self, user):
+        max_trials = 1000
+        trial = 0
+        while trial < max_trials:
+            neg_item = int(np.random.choice(self.num_items, p=self.neg_prob))
+            if neg_item not in self.user_positive.get(user, set()):
+                return neg_item
+            trial += 1
+        print(f"[DEBUG] Negative sampling failed for user {user} after {max_trials} trials. Returning {neg_item}")
+        return neg_item
+
+    def __getitem__(self, idx):
+        # 각 인덱스에 대해 (user, (pos_item, neg_item)) 튜플 반환
+        user, pos_item = self.checkins[idx]
+        neg_items = []
+        for _ in range(self.neg_sample_size):
+            neg = self._sample_negative(user)
+            neg_items.append(neg)
+        return torch.tensor([user]), torch.tensor([pos_item] + neg_items)
+
+    def __len__(self):
+        return len(self.checkins)
