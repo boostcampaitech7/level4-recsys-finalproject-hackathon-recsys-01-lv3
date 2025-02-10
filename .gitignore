@@ -16,3 +16,4 @@ pyproject.toml
 *.tar.gz
 *.png
 *.json
+/scripts/LLM
