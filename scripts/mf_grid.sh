@@ -24,7 +24,7 @@ do
         save_path="${save_base_dir}/${name}"
 
         echo "Running MF with lr=${lr}, l2_reg=${l2}, emb=${embedding_size}, epoch=${epoch}, patience=${patience}"
-        python main.py \
+        python main_recsys.py \
             --model MF \
             --epoch ${epoch} \
             --patience ${patience} \

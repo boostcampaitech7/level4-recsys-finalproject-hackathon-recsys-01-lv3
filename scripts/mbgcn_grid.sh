@@ -4,12 +4,12 @@
 
 embedding_size=64
 epoch=400
-patience=40
+patience=10
 train_batch_size=4096
 valid_batch_size=16384
 device="cuda"
 data_path="src/data/MBGCN/data"
-dataset_name="final"
+dataset_name="final2"
 relations="cart,view"
 save_base_dir="src/data/MBGCN/data/final/trained_models"
 
@@ -21,8 +21,8 @@ mgnn_weight="[1.0, 1.0]"
 
 # lr과 l2_reg의 grid search 
 # lr_list=('1e-3', '3e-4', '1e-4')
-lr_list=('1e-3')
-l2_list=('1e-4')
+lr_list=('3e-5')
+l2_list=('1e-6')
 
 for lr in "${lr_list[@]}"
 do
@@ -37,7 +37,7 @@ do
         echo "Running MBGCN with lr=${lr}, l2_reg=${l2}, emb=${embedding_size}"
         echo "Using pretrain model from: ${pretrain_dir}/model.pkl"
         
-        python main.py \
+        python main_recsys.py \
             --model MBGCN \
             --lr ${lr} \
             --l2_reg ${l2} \

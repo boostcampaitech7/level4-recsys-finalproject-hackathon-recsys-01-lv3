@@ -94,8 +94,6 @@ class TrainManager:
     
     def _evaluate_loader(self, loader):
         self.model.eval()
-        # if self.args.model == "MBGCN":
-        #     self.model.encode()
         k_values = [20, 40, 80]
         recall_metrics = {k: Recall(topk=k) for k in k_values}
         ndcg_metrics = {k: NDCG(topk=k) for k in k_values}
@@ -119,8 +117,7 @@ class TrainManager:
                     num_items = ground_truth.size(1)
                     if max_index >= num_items:
                         print(f"DEBUG: max_index in topk_items: {max_index}, num_items: {num_items}")
-                    # print(f"DEBUG: topk_items: {topk_items}")
-                    # print(f"DEBUG: topk_items.min(): {topk_items.min().item()}, topk_items.max(): {topk_items.max().item()}")
+                    
                     # ground_truth.gather(1, topk_items) => (batch_size, k)
                     # 각 사용자에 대해, topk_items 위치의 값이 1이면 hit
                     hits = (ground_truth.gather(1, topk_items) > 0).any(dim=1).float()
@@ -155,7 +152,7 @@ class TrainManager:
                 user_ids = batch[0].to(self.device)                     # (batch_size,)
                 ground_truth = batch[1].to(self.device)                 # (batch_size, num_items)
                 # **여기서는 train_mask를 사용하지 않고 평가**
-                scores = self.model.evaluate(user_ids)                # (batch_size, num_items)
+                scores = self.model.evaluate(user_ids)                  # (batch_size, num_items)
                 
                 for k in k_values:
                     _, topk_items = torch.topk(scores, k, dim=1)        # (batch_size, k)
@@ -178,9 +175,6 @@ class TrainManager:
         return metrics
     
     def train_epoch(self):
-        # MBGCN 모델의 경우, 학습 epoch 시작 전에 encode()를 호출해서 임베딩을 캐시합니다.
-        # if self.args.model == "MBGCN":
-        #     self.model.encode()
         self.model.train()
         total_loss = 0.0
         progress = tqdm(self.train_loader, desc=Fore.YELLOW + "Training", ncols=80)
@@ -192,34 +186,20 @@ class TrainManager:
             neg_item_ids = pos_neg[:, 1].view(-1, 1)
             # 디버깅: 배치 내 negative 샘플들의 통계 출력
             neg_values = neg_item_ids.cpu().numpy()
-            # print(f"DEBUG: Neg sample stats: min={neg_values.min()}, max={neg_values.max()}, mean={neg_values.mean()}")
             
             pos_scores, pos_L2 = self.model(user_ids, pos_item_ids)
             neg_scores, neg_L2 = self.model(user_ids, neg_item_ids)
             
             loss = bpr_loss(pos_scores, neg_scores, pos_L2, neg_L2, self.args.train_batch_size, self.args.L2_norm)
             loss.backward()
-            # self.model 내의 behavior_alpha gradient 확인
-            # print("[DEBUG] behavior_alpha grad:", self.model.behavior_alpha.grad)
-            # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10)
             self.optimizer.step()
             total_loss += loss.item()
-            
-            # # TrainManager.train_epoch()의 루프 안에 추가해 보세요.
-            # for name, param in self.model.named_parameters():
-            #     if param.grad is not None:
-            #         print(name, param.grad.norm().item())
             
             progress.set_postfix({"Loss": f"{loss.item():.4f}"})
         avg_loss = total_loss / len(self.train_loader)
         return avg_loss
     
     def train_total_epoch(self, total_loader):
-        """
-        전체 데이터셋(total.txt)로 한 epoch 학습하는 메서드.
-        TotalTrainDataset에서 (user, (pos_item, neg_item)) 쌍을 반환하므로,
-        기존의 train_epoch와 동일한 방식으로 loss를 계산할 수 있습니다.
-        """
         self.model.train()
         total_loss = 0.0
         progress = tqdm(total_loader, desc=Fore.YELLOW + "Retraining on Total", ncols=80)
@@ -256,7 +236,6 @@ class TrainManager:
             epoch_time = time.time() - start_time
             log = (f"{Fore.WHITE}{Style.BRIGHT}Epoch {epoch:03d}/{self.args.epoch:03d} | "
                    f"{Fore.YELLOW}Train Loss: {train_loss:.6f}\n"
-                #    + " | ".join([f"{Fore.GREEN}Train Recall@{k}: {train_metrics[f'Recall@{k}']:.4f}" for k in [10, 20, 40]])
                    + "\n" + " | ".join([f"{Fore.BLUE}Valid Recall@{k}: {valid_metrics[f'Recall@{k}']:.4f}" for k in [20, 40, 80]])
                 #    + "\n" + " | ".join([f"{Fore.CYAN}Valid NDCG@{k}: {valid_metrics[f'NDCG@{k}']:.4f}" for k in [10, 20, 40]])
                    + f" | {Fore.MAGENTA}Time: {epoch_time:.2f}s")
@@ -281,7 +260,6 @@ class TrainManager:
         for k in sorted(final_test_metrics.keys()):
             print(f"{k}: {final_test_metrics[k]:.4f}")
         
-        # ---------- retraining on 전체 데이터셋(total.txt) ----------
         # TotalTrainDataset을 사용하여 전체 데이터셋으로부터 pos/neg 샘플을 생성
         from src.data.dataset import TotalTrainDataset  # TotalTrainDataset 클래스를 import
         total_train_dataset = TotalTrainDataset(
