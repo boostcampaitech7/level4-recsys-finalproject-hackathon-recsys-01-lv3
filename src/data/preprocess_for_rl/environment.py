@@ -2,10 +2,21 @@ import torch
 import polars as pl
 import numpy as np
 
+
 class DynamicPricingEnv:
+    """
+    A class to simulate a dynamic pricing environment for reinforcement learning.
+    """
+
     def __init__(self, df: pl.DataFrame, item_user_scores, elasticity_df, raw_df):
         """
         Initialize the Dynamic Pricing Environment.
+
+        Args:
+            df (pl.DataFrame): Dataframe containing state information.
+            item_user_scores (dict): Precomputed user scores for each item.
+            elasticity_df (pl.DataFrame): Dataframe containing price elasticity data.
+            raw_df (pl.DataFrame): Raw dataframe for user-product interactions.
         """
         self.df = df
         self.current_day_idx = 0
@@ -17,87 +28,122 @@ class DynamicPricingEnv:
         max_price = elasticity_df["price_bucket"].max()
         self.PRICE_BUCKETS = np.linspace(min_price, max_price, num=21)
 
-        self.price_action_space = np.linspace(-0.3, 0.0, num=7)  # 가격 조정 범위: [-0.3, -0.25, ..., 0.0]
-        self.top_k_action_space = range(1, 10001)  # 추천 사용자 수 범위
+        self.price_action_space = np.linspace(-0.3, 0.0, num=7)
+        self.top_k_action_space = range(1, 10001)
         self.continuous_columns = ["price"]
         self.extend_columns = ["item_id", "category_id_encoded", "brand_id"]
 
-
     def extend_state_with_metadata(self, state_continuous, extend_data):
         """
-        상태를 확장하여 연속형 상태와 범주형 데이터를 결합.
+        Extend the state with metadata.
+
+        Args:
+            state_continuous (np.ndarray): Continuous state variables.
+            extend_data (np.ndarray): Additional metadata to extend the state.
+
+        Returns:
+            np.ndarray: Extended state.
         """
-        extended_state = np.concatenate((
-            np.ravel(state_continuous), 
-            np.ravel(extend_data)
-        ))
-            
-        return extended_state
-    
+        return np.concatenate((np.ravel(state_continuous), np.ravel(extend_data)))
+
     def reset(self):
         """
-        Reset the environment to the initial state and return the extended state.
+        Reset the environment to the initial state.
+
+        Returns:
+            np.ndarray: Initial extended state.
         """
         self.current_day_idx = 0
-        
-        # 초기 상태 가져오기 (확장된 형태로)
-        state = self._get_state(self.current_day_idx)
-        return state
+        return self._get_state(self.current_day_idx)
 
     def _get_state(self, idx):
         """
-        Extract the state features for a given index and extend with metadata.
-        :param idx: Index of the current day in the dataset.
-        :return: Extended state as a NumPy array.
+        Extract and extend the state for a given index.
+
+        Args:
+            idx (int): Index of the current day in the dataset.
+
+        Returns:
+            np.ndarray: Extended state as a NumPy array.
         """
-        # 연속형 상태 가져오기
-        row = self.df.row(idx, named=True)  # Use named=True to get a dictionary
+        row = self.df.row(idx, named=True)
         state_continuous = np.array([row[col] for col in self.continuous_columns])
-
-        # 추가 데이터 (범주형 데이터 등)
-        extend_data = np.array([
-            row[col] for col in self.extend_columns
-        ])
-
-        # 상태 확장
-        extended_state = self.extend_state_with_metadata(state_continuous, extend_data)
-        return extended_state
+        extend_data = np.array([row[col] for col in self.extend_columns])
+        return self.extend_state_with_metadata(state_continuous, extend_data)
 
     def validate_action(self, price_action, top_k_action):
-        # 가격 조정 액션 검증
+        """
+        Validate the actions before applying them.
+
+        Args:
+            price_action (float): Price adjustment action.
+            top_k_action (int): Top-K recommendation action.
+
+        Raises:
+            ValueError: If actions are invalid.
+        """
         if price_action not in self.price_action_space:
             raise ValueError(f"Invalid price action: {price_action}. Must be one of {self.price_action_space}.")
         
-        # 추천 사용자 수 액션 검증
         if not isinstance(top_k_action, int):
             raise ValueError(f"Invalid top_k action: {top_k_action}. Must be an integer.")
+        
         if top_k_action not in self.top_k_action_space:
             raise ValueError(f"Invalid top_k action: {top_k_action}. Must be between {min(self.top_k_action_space)} and {max(self.top_k_action_space)}.")
 
     def discretize_top_k(self, top_k_action):
-        # 추천 사용자 수를 정수화하여 가장 가까운 정수 반환
+        """
+        Discretize the top-K action by rounding to the nearest integer.
+
+        Args:
+            top_k_action (float): Continuous top-K action.
+
+        Returns:
+            int: Discretized top-K action.
+        """
         return int(round(top_k_action))
-    
+
     def sample_price_action(self):
+        """
+        Sample a random price adjustment action.
+
+        Returns:
+            float: Randomly sampled price adjustment.
+        """
         return np.random.choice(self.price_action_space)
 
     def sample_top_k_action(self):
+        """
+        Sample a random top-K recommendation action.
+
+        Returns:
+            int: Randomly sampled top-K value.
+        """
         return np.random.randint(min(self.top_k_action_space), max(self.top_k_action_space) + 1)
 
     def step(self, actions):
         """
         Perform an action in the environment.
-        :param actions: Tuple (price adjustment, top_k adjustment).
-        :return: next_state, high_level_reward, low_level_reward, done.
+
+        Args:
+            actions (tuple): Tuple containing price adjustment and top-K adjustment actions.
+
+        Returns:
+            tuple: 
+                - next_state (np.ndarray or None): The next extended state or None if the episode is done.
+                - low_level_reward (float): Reward from the low-level policy.
+                - done (bool): Whether the episode is finished.
+
+        Raises:
+            IndexError: If current_day_idx exceeds dataset bounds.
+            ValueError: If actions are invalid.
         """
         price_action, top_k_action = actions
         top_k_action = self.discretize_top_k(top_k_action)
 
-        # Validate actions before proceeding
         self.validate_action(price_action, top_k_action)
 
-        # 종료 조건 확인
-        if self.current_day_idx >= len(self.df):  # 인덱스 초과 방지
+        if self.current_day_idx >= len(self.df):
             raise IndexError(f"current_day_idx {self.current_day_idx} is out of bounds for DataFrame with length {len(self.df)}")
 
         current_row = self.df.row(self.current_day_idx, named=True)
@@ -107,116 +153,107 @@ class DynamicPricingEnv:
         current_price_bucket = self._get_price_bucket(current_price)
         elasticity = self.elasticity_df.filter(pl.col("price_bucket") == current_price_bucket)["elasticity"].to_numpy()[0]
 
-        # 가격 조정 및 수요량 계산
         next_price = max(0, current_price * (1 + price_action))
-        demand_change_rate = (1 + (elasticity * price_action))
+        demand_change_rate = 1 + (elasticity * price_action)
 
-        # Precision at K 계산
         true_users = self.get_true_users(product_id, next_price)
         precision_at_k_value = self.precision_at_k(product_id, true_users, top_k=int(top_k_action))
 
-        # RecSys Value 계산 (추천 시스템 관련 매출)
-        recsys_value = self.calculate_recsys_value(next_price, precision_at_k_value, top_k_action, demand_change_rate)
+        reward = self.calculate_recsys_value(next_price, precision_at_k_value, top_k_action, demand_change_rate)
 
-        # 보상 계산
-        low_reward = self.low_level_reward(recsys_value=recsys_value)
-
-        # 다음 상태로 이동
         self.current_day_idx += 1
-        done = (self.current_day_idx >= len(self.df))  # 종료 조건
+        done = self.current_day_idx >= len(self.df)
 
         if done:
-            return None, low_reward, done
+            return None, reward, done
 
         next_state = self._get_state(self.current_day_idx)
-        
-        return next_state, low_reward, done
+        return next_state, reward, done
 
     def calculate_recsys_value(self, next_price, precision_at_k, top_k_action, next_demand):
         """
-        추천 시스템 매출 기여도(RecSys Value) 계산
-        :param next_price: 조정된 다음 가격
-        :param precision_at_k: Precision@K 값
-        :param top_k_action: 추천 Top-K 값
-        :param next_demand: 조정된 다음 수요량
-        :return: RecSys Value (추천 시스템 관련 매출)
+        Calculate the revenue contribution of the recommendation system (RecSys Value).
+
+        Args:
+            next_price (float): Adjusted price for the next step.
+            precision_at_k (float): Precision@K value.
+            top_k_action (int): Number of top-K recommendations.
+            next_demand (float): Adjusted demand for the next step.
+
+        Returns:
+            float: RecSys Value representing the revenue contribution.
         """
         demand = int(round(precision_at_k * int(top_k_action) * next_demand))
-        marketing_cost = (next_price * 0.01) * int(top_k_action)  # 마케팅 비용
+        marketing_cost = (next_price * 0.01) * int(top_k_action)
         recsys_value = ((next_price * demand) - marketing_cost)
         return recsys_value
-    
+
     def _get_price_bucket(self, price):
         """
-        주어진 가격이 속하는 price_bucket을 반환.
-        :param price: 현재 가격.
-        :return: 해당 price_bucket 값.
+        Determine the price bucket for a given price.
+
+        Args:
+            price (float): The current price.
+
+        Returns:
+            float: The corresponding price bucket.
         """
         for i in range(len(self.PRICE_BUCKETS) - 1):
             if self.PRICE_BUCKETS[i] <= price < self.PRICE_BUCKETS[i + 1]:
                 return self.PRICE_BUCKETS[i]
-        
-        return self.PRICE_BUCKETS[-1]  # 마지막 구간 처리
+        return self.PRICE_BUCKETS[-1]
 
     def get_true_users(self, product_id, next_price):
         """
-        주어진 product_id에 대해 상호작용한 실제 사용자 리스트 반환.
-        :param product_id: 상품 ID.
-        :param next_price: 다음 가격 (필터 기준).
-        :return: 다음 가격보다 낮은 가격으로 구매한 사용자 ID 리스트.
+        Retrieve a list of true users who interacted with a product at or above a given price.
+
+        Args:
+            product_id (int): The product ID.
+            next_price (float): The threshold price.
+
+        Returns:
+            list: List of user IDs who interacted with the product at or above the given price.
         """
-        # Get all true users for the given product_id
-        # true_users = self.true_users_by_product.get(product_id, [])
-
         user_data = self.raw_df.filter(pl.col("item_id") == product_id)
-
-
-        # Filter users based on the next_price condition
         filtered_users = (
             user_data.filter(pl.col("price") >= next_price)["user_id"]
             .unique()
             .to_list()
         )
         return filtered_users
-        
+
     def recommend_users(self, product_id, top_k):
         """
-        주어진 상품에 대해 추천 사용자 리스트 반환 (미리 계산된 점수 사용).
-        :param product_id: 추천 대상 상품 ID.
-        :param top_k: 추천할 사용자 수.
-        :return: 추천 사용자 ID 리스트.
+        Retrieve a list of recommended users for a given product based on precomputed scores.
+
+        Args:
+            product_id (int): The product ID for recommendations.
+            top_k (int): Number of top recommendations to retrieve.
+
+        Returns:
+            list: List of recommended user IDs.
         """
         if product_id not in self.item_user_scores:
             return []
-
-        # Precomputed user scores에서 top_k 사용자 반환 (slicing)
         return self.item_user_scores[product_id][:top_k]
 
     def precision_at_k(self, product_id, true_users, top_k):
         """
-        Calculate Precision@k using the precomputed item similarity matrix.
-        :param product_id: The product ID for which to calculate precision.
-        :param true_users: List of true users who interacted with the product.
-        :param top_k: Number of top recommendations to consider.
-        :return: Precision@k value.
-        """
-        # Get recommended users for the given product_id
-        recommended_users = self.recommend_users(product_id, top_k=top_k)
+        Calculate Precision@K for a given product and its true users.
 
+        Args:
+            product_id (int): The product ID.
+            true_users (list): List of true users who interacted with the product.
+            top_k (int): Number of top recommendations to consider.
+
+        Returns:
+            float: Precision@K value.
+        """
+        recommended_users = self.recommend_users(product_id, top_k=top_k)
+        
         if isinstance(recommended_users, torch.Tensor):
             recommended_users = recommended_users.tolist()
 
-        # Calculate Precision: |relevant ∩ recommended| / |recommended|
         relevant_and_recommended = len(set(recommended_users) & set(true_users))
         precision = relevant_and_recommended / len(recommended_users) if len(recommended_users) > 0 else 0
-
         return precision
-    
-    def low_level_reward(self, recsys_value):
-        """
-        하위 계층 보상 함수: 추천 시스템의 기여도를 최적화.
-        :param recsys_value: 추천 시스템이 기여한 매출 가치.
-        :return: 하위 계층 보상 값.
-        """
-        reward = recsys_value # 정규화된 추천 시스템 가치 (현재 사용 안함.)
-        return reward

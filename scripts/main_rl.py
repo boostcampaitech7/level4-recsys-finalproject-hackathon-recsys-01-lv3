@@ -1,61 +1,74 @@
 import os
 import sys
-project_root = os.path.join(os.path.expanduser("~"), "Hackathon")
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
+import yaml
+import argparse
+import polars as pl
 from src.agent.DQNTD3Agent import HRLAgent
 from src.data.preprocess_for_rl.environment import DynamicPricingEnv
 from src.data.preprocess_for_rl.cal_elasticity import ElasticityCalculator
 from src.data.preprocess_for_rl.data_preprocess import PreprocessRL
-import yaml
-import polars as pl
 
-DATA_PATH = "/data/ephemeral/home/Hackathon/data/final_purchase_df.parquet"
-CONFIG = "/data/ephemeral/home/Hackathon/config/rl.yaml"
-REC_PATH = "/data/ephemeral/home/Hackathon/data/item_topk.pkl"
+def main(args):
+    """
+    Main function to execute the reinforcement learning pipeline.
 
-def main():
-    # 설정 파일 로드
-    with open(CONFIG, "r") as file:
+    Args:
+        args (argparse.Namespace): Command-line arguments.
+    """
+    project_root = os.path.join(os.path.expanduser("~"), "Hackathon")
+    if project_root not in sys.path:
+        sys.path.append(project_root)
+
+    with open(args.config_path, "r") as file:
         config = yaml.safe_load(file)
-    print("설정 파일 불러오기 완료.")
+    print("Configuration file loaded successfully.")
 
-    # 데이터 불러오기
-    df = pl.read_parquet(DATA_PATH)
-    preprocess = PreprocessRL(df, REC_PATH)
+    df = pl.read_parquet(args.data_path)
+    preprocess = PreprocessRL(df, args.rec_path)
+    print("Data loaded successfully.")
 
-    print("데이터 불러오기 완료.")
-
-    # 데이터 전처리
     elasticity_calculator = ElasticityCalculator(df)
     elasticity_df = elasticity_calculator.run()
-    print("가격 탄력성 계산 완료.")
+    print("Price elasticity calculation completed.")
+
     train_df = preprocess.make_train_df(random=True)
-    print("학습 데이터 전처리 완료.")
+    print("Training data preprocessing completed.")
+
     recsys_df = preprocess.load_recsys()
-    print("추천시스템 결과 불러오기 완료.")
+    print("Recommendation system data loaded successfully.")
 
-    # true_user_df = preprocess.true_user_df()
-    # print("실제 구매 유저 데이터 전처리 완료.")
-
-    # 환경 불러오기
     env = DynamicPricingEnv(
-        df=train_df,  # DataFrame containing state information
-        item_user_scores=recsys_df,  # Precomputed recommendation scores
-        elasticity_df=elasticity_df,  # Price elasticity data
+        df=train_df,
+        item_user_scores=recsys_df,
+        elasticity_df=elasticity_df,
         raw_df=df
     )
-    print("강화학습 MDP 환경 초기화 및 불러오기 완료.")
+    print("Reinforcement learning environment initialized successfully.")
 
-    # Agent 초기화 및 불러오기
     agent = HRLAgent(env, config)
-    print("HRL : DQN-TD3 학습 Agent 초기화 및 불러오기 완료.")
+    print("HRL Agent (DQN-TD3) initialized successfully.")
 
-    print("학습 시작")
-    # 학습
-    agent.train(num_episodes=500, warm_up=50)
+    print("Starting training...")
+    agent.train(num_episodes=args.num_episodes, warm_up=args.warm_up)
 
-# 실행
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run the reinforcement learning pipeline.")
+    
+    parser.add_argument("--data-path", type=str, required=True, 
+                        help="Path to the input data file (Parquet format).")
+    
+    parser.add_argument("--config-path", type=str, required=True, 
+                        help="Path to the YAML configuration file.")
+    
+    parser.add_argument("--rec-path", type=str, required=True, 
+                        help="Path to the recommendation system data file (Pickle format).")
+    
+    parser.add_argument("--num-episodes", type=int, default=200, 
+                        help="Number of episodes for training. Default is 200.")
+    
+    parser.add_argument("--warm-up", type=int, default=20, 
+                        help="Number of warm-up episodes. Default is 20.")
+    
+    args = parser.parse_args()
+    
+    main(args)
