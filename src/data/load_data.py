@@ -1,9 +1,6 @@
-# 데이터 로드 함수# /src/data/load_data.py
-
 import polars as pl
 import src.data.preprocessor as preprocessor
 
-# 데이터 로드 함수
 def load_data_lazy(base_path: str, preprocess: bool = False):
     """
     Load data lazily from parquet files.
