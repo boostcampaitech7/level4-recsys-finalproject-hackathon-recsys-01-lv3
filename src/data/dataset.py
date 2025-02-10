@@ -1,26 +1,30 @@
 import os
 import random
-import torch
+
 import numpy as np
 import scipy.sparse as sp
+import torch
 from torch.utils.data import Dataset
 
 class TrainDataset(Dataset):
+    """
+    Dataset for training interactions.
+
+    Args:
+        data_path (str): Path to the dataset directory.
+        dataset_name (str): Name of the dataset (e.g. "Tmall").
+        relations (str, optional): Comma-separated string of relations. Defaults to "buy,cart,click,collect".
+        neg_sample_size (int, optional): Number of negative samples per positive sample. Defaults to 1.
+        debug_sample (bool, optional): Whether to print debug information. Defaults to False.
+    """
     def __init__(
         self, 
         data_path: str,
         dataset_name: str,
         relations: str="buy,cart,click,collect",
-        neg_sample_size: int = 1,   # 각 positive sample 당 negative sample 수
-        debug_sample: bool = False  # 디버깅 메시지 출력 여부
+        neg_sample_size: int = 1,   
+        debug_sample: bool = False  
     ):
-        """
-        Args:
-            - data_path: "src/data/MBGCN/Tmall/"
-            - dataset_name: e.g. "Tmall"
-            - relations: comma-separated relations
-            - sample_epoch: index of sample-file to read
-        """
         super().__init__()
         self.path = data_path
         self.name = dataset_name
@@ -33,19 +37,21 @@ class TrainDataset(Dataset):
         self._generate_ground_truth()
         self._generate_train_matrix()
         self._load_item_graph()
-        # self.cnt = sample_epoch
-        # self._read_train_data(self.cnt)
-        self._build_user_positive() # build user -> pos set for negative sampling
-        # build item frequency and negative sampling distribution (using exponent 0.75)
+        self._build_user_positive() 
         self._build_item_sampling_distribution()
         
     def _decode_relation(self, relations_str: str):
-        # e.g. "buy,cart,click,collect" => ["buy", "cart", "click", "collect"]
+        """
+        Decode the relation string into a list.
+
+        Args:
+            relations_str (str): Comma-separated relations.
+        """
         self.relation = relations_str.split(",")
     
     def _load_size(self):
         """
-        data_size.txt => user_num, item_num
+        Load dataset size from 'data_size.txt'. Expected file format: "user_num item_num".
         """
         size_file = os.path.join(self.path, self.name, "data_size.txt")
         with open(size_file, 'r') as f:
@@ -56,28 +62,26 @@ class TrainDataset(Dataset):
             
     def _load_item_graph(self):
         """
-        For each realation, load_item{relation}.pth -> (num_items, num_items)
-        => store in self.item_graph
-        => store degree as sum of row
+        For each relation, load the item graph from 'item/item_{relation}.pth'
+        and compute the row-sum (degree) for each item.
         """
         self.item_graph = {}
         self.item_graph_degree = {}
         for r in self.relation:
-            # item_buy.pth, item_cart.pth, item_click.pth, item_collect.pth
             pth_path = os.path.join(self.path, self.name, 'item', 'item_' + r + '.pth')
             if not os.path.exists(pth_path):
                 self.item_graph[r] = torch.zeros(self.num_items, self.num_items, dtype=torch.int32)
                 self.item_graph_degree[r] = torch.zeros(self.num_items, 1, dtype=torch.float32)
                 continue
-            t = torch.load(pth_path, weights_only=True) # shape=(num_items, num_items), dtype=inr32
+            t = torch.load(pth_path, weights_only=True) 
             self.item_graph[r] = t
             deg = t.sum(dim=1).float().unsqueeze(-1)
             self.item_graph_degree[r] = deg
 
     def _create_relation_matrix(self):
         """
-        For each relation e.g. buy.txt => parse lines => build sparse
-        => store in self.relation_dict[relation] = sparse_coo_tensor
+        For each relation (e.g. from 'buy.txt'), parse the file and build a sparse COO tensor.
+        The tensor is stored in self.relation_dict.
         """
         self.relation_dict = {}
         for r in self.relation:
@@ -99,45 +103,34 @@ class TrainDataset(Dataset):
                     user, item = int(user_str), int(item_str)
                     index.append([user,item])
             if len(index)==0:
-                # empty
                 self.relation_dict[r] = torch.sparse_coo_tensor(
                     torch.zeros((2,0),dtype=torch.long),
                     torch.zeros((0,),dtype=torch.float),
                     size=(self.num_users,self.num_items)
                 )
                 continue
-            index_tensor = torch.LongTensor(index)  # shape=(N,2)
+            index_tensor = torch.LongTensor(index)  
             lens = index_tensor.size(0)
             ones = torch.ones(lens, dtype=torch.float)
-            # shape => ( user, item ), values => 1
-            # we want shape=(user_num, item_num)
             sp_tensor = torch.sparse_coo_tensor(
                 index_tensor.t(), # (2,N)
                 ones,
                 size=(self.num_users, self.num_items)
             )
             self.relation_dict[r] = sp_tensor.coalesce()
-        # for b in self.relation:
-        #     mat = self.relation_dict[b]
-        #     print(f"Behavior '{b}': nonzero count = {mat._nnz()}")
-        # for b in self.relation:
-        #     I = self.relation_dict[b]
-        #     print(f"Behavior '{b}' ii_mats: mean={I.mean().item():.4f}, std={I.std().item():.4f}")
-    
+       
     def _calculate_user_behavior(self):
         """
-        For each user, how many items in each relation => user_behavior_degree
-        For each item, how many users in each relation => item_behavior_degree
-        => stored in shape=(user_num, #relation), (item_num, #relation)
-        => uses to_dense() => watch out for memory if large
+        Calculate the behavior degree for users and items.
+        For each relation, compute the number of interactions per user and per item.
         """
         user_behavior = None
         item_behavior = None
         for i, r in enumerate(self.relation):
-            sp_r = self.relation_dict[r] # shape=(num_users, num_items)
+            sp_r = self.relation_dict[r] 
             dense_r = sp_r.to_dense()
-            user_sum = dense_r.sum(dim=1, keepdim=True) # (num_users, 1)
-            item_sum = dense_r.t().sum(dim=1, keepdim=True) # (num_items, 1)
+            user_sum = dense_r.sum(dim=1, keepdim=True) 
+            item_sum = dense_r.t().sum(dim=1, keepdim=True)
             if i==0:
                 user_behavior = user_sum
                 item_behavior = item_sum
@@ -149,9 +142,8 @@ class TrainDataset(Dataset):
         
     def _generate_ground_truth(self):
         """
-        Use train.txt => ground_truth matrix => CSR
-        => self.ground_truth => sp.csr_matrix(...)
-        => self.checkins => array of (user, item)
+        Generate the ground truth interaction matrix from 'train.txt' using CSR format.
+        Also stores the check-ins as an array of (user, item) pairs.
         """
         txt_file = os.path.join(self.path, self.name, "train.txt")
         row_data = []
@@ -166,7 +158,6 @@ class TrainDataset(Dataset):
         row_data = np.array(row_data, dtype=np.int32)
         col_data = np.array(col_data, dtype=np.int32)
         values = np.ones(len(row_data), dtype=float)
-        # shape=(num_users, num_items)
         self.ground_truth = sp.csr_matrix(
             (values, (row_data, col_data)),
             shape=(self.num_users, self.num_items)
@@ -175,8 +166,7 @@ class TrainDataset(Dataset):
     
     def _generate_train_matrix(self):
         """
-        A big matrix for GCN => sum of all training edges?
-        Actually old code uses only train.txt => sp matrix
+        Generate a training matrix (sparse COO tensor) from 'train.txt'.
         """
         txt_file = os.path.join(self.path, self.name, "train.txt")
         index = []
@@ -193,7 +183,7 @@ class TrainDataset(Dataset):
                 size=(self.num_users, self.num_items)
             )
             return
-        index_tensor = torch.LongTensor(index) # (N,2)
+        index_tensor = torch.LongTensor(index)
         lens = index_tensor.size(0)
         ones = torch.ones(lens, dtype=torch.float)
         sp_tensor = torch.sparse_coo_tensor(
@@ -205,85 +195,88 @@ class TrainDataset(Dataset):
     
     def _build_user_positive(self):
         """
-        각 사용자별로 이미 본 아이템 집합을 딕셔너리 형태로 저장
-        CSR Matrix의 indptr와 indices를 활용
+        Build a dictionary mapping each user to the set of items they have interacted with.
         """
         self.user_positive = {}
         gt = self.ground_truth
         for user in range(self.num_users):
             start = gt.indptr[user]
             end = gt.indptr[user+1]
-            # gt.indices[start:end]는 해당 사용자의 positive 아이템 인덱스
             self.user_positive[user] = set(gt.indices[start:end])
-        # 디버깅 코드
         if self.debug_sample:
             print(f"DEBUG: Built user_positive mapping for {len(self.user_positive)} users.")
         
     def _build_item_sampling_distribution(self):
         """
-        train 데이터를 기반으로 각 아이템의 등장 빈도를 계산한 후,
-        negative sampling을 위한 확률 분포를 만든다.
-        여기서는 빈도의 0.75승을 사용하여 확률을 재조정한다.
+        Build the negative sampling probability distribution based on item frequency.
+        Uses frequency^0.75 for reweighting.
         """
-        # 아이템 등장 횟수 계산(ground_truth의 non-zero count)
-        freq = self.ground_truth.getnnz(axis=0).astype(np.float32)  # shape: (num_items,)
-        # smoothing exponent 0.75 (Word2Vec 등에서 사용하는 방식)
+        freq = self.ground_truth.getnnz(axis=0).astype(np.float32) 
         freq_pow = np.power(freq, 0.75)
         total = freq_pow.sum()
-        self.neg_prob = freq_pow / total # shape: (num_items,)
-        # 디버깅:
+        self.neg_prob = freq_pow / total 
         if self.debug_sample:
-            print(f"DEBUG: Negative sampling probability: min={self.neg_prob.min():.6f}, max={self.neg_prob.max():.6f}, sum={self.neg_prob.sum():.6f}")
+            print(
+                f"[DEBUG] Negative sampling probability: min={self.neg_prob.min():.6f}, "
+                f"max={self.neg_prob.max():.6f}"
+            )
 
     def _sample_negative(self, user):
         """
-        주어진 user에 대해, 이미 본 아이템이 아닌 negative sample을
-        weighted sampling (self.neg_prob)을 사용하여 선택
+        Sample a negative item for the given user using weighted sampling.
+        
+        Args:
+            user (int): User index.
+        
+        Returns:
+            int: Negative item index.
         """
         max_trials = 1000
         trial = 0
         while trial < max_trials:
-            # np.random.choice를 이용해 음성 샘플 하나 선택 (부정 샘플 수가 1개인 경우)
             neg_item = int(np.random.choice(self.num_items, p=self.neg_prob))
             if neg_item not in self.user_positive.get(user, set()):
                 return neg_item
             trial += 1
-        # 디버깅: 만약 max_trials번 내에 샘플링 실패 시, 강제로 반환 (예외 발생 가능)
         print(f"DEBUG: Failed to sample negative for user {user} after {max_trials} trials. Returning last candidate {neg_item}")
         return neg_item
 
-    # def newit(self):
-    #     """
-    #     move to next sample_x.txt
-    #     """
-    #     self.cnts += 1
-    #     self._read_train_data(self.cnt)
     
     def __getitem__(self, idx):
         """
-        각 인덱스에 대해 (user, (pos_item, neg_item)) 반환
+        Get the training sample for the given index.
+        
+        Returns:
+            tuple: (torch.Tensor of user index, torch.Tensor of [positive item, negative items])
         """
-        # checkins는 (user, pos_item) 쌍입니다.
         user, pos_item = self.checkins[idx]
         neg_items = []
         for _ in range(self.neg_sample_size):
             neg = self._sample_negative(user)
             neg_items.append(neg)
-        # if self.debug_sample:
-        #     print(f"DEBUG: For user {user}, pos_item {pos_item}, sampled neg_item(s) {neg_items}")
         return torch.tensor([user]), torch.tensor( [pos_item] + neg_items )
     
     def __len__(self):
         """
-        => len(self.checkins)
-        (or len of train_tmp if we want #pos?)
-        Old code does => len(self.checkins)
-        but checkins is #train positives from train.txt
+        Return the number of training samples.
+        
+        Returns:
+            int: Number of samples.
         """
         return len(self.checkins)
     
 
 class TestDataset(Dataset):
+    """
+    Dataset for testing or validation.
+
+    Args:
+        data_path (str): Path to the dataset directory.
+        dataset_name (str): Name of the dataset.
+        trainset (TrainDataset): Instance of the training dataset (to access ground truth).
+        task (str, optional): Task type ("test" or "validation"). Defaults to "test".
+    """
+    
     def __init__(
         self,
         data_path: str,
@@ -291,10 +284,6 @@ class TestDataset(Dataset):
         trainset: TrainDataset, 
         task="test"
     ):
-        """
-        uses trainset.ground_truth => (num_users, num_items)
-        self.ground_truth => (num_users, num_items) for valid or test
-        """
         super().__init__()
         self.path = data_path
         self.name = dataset_name
@@ -304,6 +293,9 @@ class TestDataset(Dataset):
         self._read_testset()
         
     def _read_testset(self):
+        """
+        Read the test (or validation) file and build the ground truth CSR matrix.
+        """
         txt_file = os.path.join(self.path, self.name, f"{self.task}.txt")
         row=[]
         col=[]
@@ -326,24 +318,38 @@ class TestDataset(Dataset):
         )
     
     def __getitem__(self, idx):
-        row_gt = self.ground_truth.getrow(idx).toarray().squeeze() # (num_items,)
-        row_tr = self.train_mask.getrow(idx).toarray().squeeze().astype(np.float32)   # (num_items,)
-        # 디버깅: 각 row의 shape과 최댓값/최솟값을 출력해볼 수 있음
-        # print(f"DEBUG: __getitem__ idx {idx}: row_gt shape: {row_gt.shape}, min: {row_gt.min()}, max: {row_gt.max()}")
-        # print(f"DEBUG: __getitem__ idx {idx}: row_tr shape: {row_tr.shape}, min: {row_tr.min()}, max: {row_tr.max()}")
+        """
+        Get the test sample for a given user index.
         
+        Returns:
+            tuple: (user index, ground truth tensor, train mask tensor)
+        """
+        row_gt = self.ground_truth.getrow(idx).toarray().squeeze()
+        row_tr = self.train_mask.getrow(idx).toarray().squeeze().astype(np.float32)
         return idx, torch.from_numpy(row_gt), torch.from_numpy(row_tr)
     
     def __len__(self):
+        """
+        Return the number of users.
+        
+        Returns:
+            int: Number of users.
+        """
         return self.num_users
     
-# === TotalTrainDataset: 총 데이터셋용 학습 데이터셋 ===
 class TotalTrainDataset(Dataset):
     """
-    독립적으로 구현한 총 데이터셋 학습용 데이터셋.
-    - 전체 상호작용 파일: total.txt
-    - 각 behavior 파일: r+"_total.txt"
-    - 아이템 그래프: item/item_{r}_total.pth
+    Dataset for training on the complete set of interactions.
+
+    Uses "total.txt" for overall interactions and r+"_total.txt" for each behavior,
+    along with item graphs from "item/item_{r}_total.pth".
+
+    Args:
+        data_path (str): Path to the dataset directory.
+        dataset_name (str): Name of the dataset.
+        relations (str, optional): Comma-separated relations. Defaults to "buy,cart,click,collect".
+        neg_sample_size (int, optional): Number of negative samples per positive sample. Defaults to 1.
+        debug_sample (bool, optional): Whether to print debug information. Defaults to False.
     """
     def __init__(
         self, 
@@ -369,11 +375,18 @@ class TotalTrainDataset(Dataset):
         self._build_item_sampling_distribution()
 
     def _decode_relation(self, relations_str: str):
-        # 예: "cart,view" -> ["cart", "view"]
+        """
+        Decode the relation string into a list.
+
+        Args:
+            relations_str (str): Comma-separated relations.
+        """
         self.relation = relations_str.split(",")
 
     def _load_size(self):
-        # data_size.txt 파일에서 user, item 수 읽기
+        """
+        Load dataset size from 'data_size_total.txt'.
+        """
         size_file = os.path.join(self.path, self.name, "data_size_total.txt")
         with open(size_file, 'r') as f:
             line = f.readline().strip()
@@ -383,7 +396,8 @@ class TotalTrainDataset(Dataset):
 
     def _create_relation_matrix(self):
         """
-        각 behavior의 총 상호작용 파일(r+"_total.txt")을 읽어 sparse tensor 생성.
+        For each relation, read r+"_total.txt" and build a sparse COO tensor.
+        The tensors are stored in self.relation_dict.
         """
         self.relation_dict = {}
         for r in self.relation:
@@ -425,7 +439,10 @@ class TotalTrainDataset(Dataset):
             self.relation_dict[r] = sp_tensor.coalesce()
 
     def _calculate_user_behavior(self):
-        # 각 behavior별로 사용자 및 아이템의 상호작용 횟수 계산
+        """
+        Calculate the behavior degree for users and items.
+        The result is stored in self.user_behavior_degree and self.item_behavior_degree.
+        """
         user_behavior = None
         item_behavior = None
         for i, r in enumerate(self.relation):
@@ -443,7 +460,10 @@ class TotalTrainDataset(Dataset):
         self.item_behavior_degree = item_behavior
 
     def _generate_ground_truth(self):
-        # total.txt 파일을 읽어 ground truth (전체 상호작용) 구성
+        """
+        Generate the ground truth interaction matrix from 'total.txt'
+        using CSR format and store check-ins.
+        """
         txt_file = os.path.join(self.path, self.name, "total.txt")
         row_data = []
         col_data = []
@@ -467,7 +487,9 @@ class TotalTrainDataset(Dataset):
         self.checkins = np.column_stack([row_data, col_data])
 
     def _generate_train_matrix(self):
-        # total.txt 파일을 사용하여 train matrix 구성 (GCN용)
+        """
+        Generate the training matrix from 'total.txt' as a sparse COO tensor.
+        """
         txt_file = os.path.join(self.path, self.name, "total.txt")
         index = []
         with open(txt_file, 'r') as f:
@@ -498,7 +520,8 @@ class TotalTrainDataset(Dataset):
 
     def _load_item_graph(self):
         """
-        각 behavior에 대해 item/item_{r}_total.pth 파일을 읽어 아이템 그래프 구성.
+        For each relation, load the item graph from 'item/item_{r}_total.pth'
+        and compute the degree of each item.
         """
         self.item_graph = {}
         self.item_graph_degree = {}
@@ -509,14 +532,15 @@ class TotalTrainDataset(Dataset):
                 self.item_graph[r] = torch.zeros(self.num_items, self.num_items, dtype=torch.int32)
                 self.item_graph_degree[r] = torch.zeros(self.num_items, 1, dtype=torch.float32)
                 continue
-            # map_location 추가: self.device가 없다면 기본적으로 CPU에서 로드
             t = torch.load(pth_path, map_location="cpu", weights_only=True)
             self.item_graph[r] = t
             deg = t.sum(dim=1).float().unsqueeze(-1)
             self.item_graph_degree[r] = deg
 
     def _build_user_positive(self):
-        # 각 사용자별로 이미 상호작용한 아이템 집합 구성
+        """
+        Build a dictionary mapping each user to the set of items they have interacted with.
+        """
         self.user_positive = {}
         gt = self.ground_truth
         for user in range(self.num_users):
@@ -527,6 +551,10 @@ class TotalTrainDataset(Dataset):
             print(f"[DEBUG] Built user_positive for {len(self.user_positive)} users.")
 
     def _build_item_sampling_distribution(self):
+        """
+        Build the negative sampling probability distribution based on item frequencies.
+        Uses frequency^0.75 for reweighting.
+        """
         freq = self.ground_truth.getnnz(axis=0).astype(np.float32)
         freq_pow = np.power(freq, 0.75)
         total = freq_pow.sum()
@@ -535,6 +563,15 @@ class TotalTrainDataset(Dataset):
             print(f"[DEBUG] Negative sampling: min={self.neg_prob.min():.6f}, max={self.neg_prob.max():.6f}")
 
     def _sample_negative(self, user):
+        """
+        Sample a negative item for the given user, ensuring it is not in the user's positive set.
+
+        Args:
+            user (int): User index.
+
+        Returns:
+            int: Negative item index.
+        """
         max_trials = 1000
         trial = 0
         while trial < max_trials:
@@ -546,7 +583,12 @@ class TotalTrainDataset(Dataset):
         return neg_item
 
     def __getitem__(self, idx):
-        # 각 인덱스에 대해 (user, (pos_item, neg_item)) 튜플 반환
+        """
+        Get the training sample at the given index.
+
+        Returns:
+            tuple: (torch.Tensor containing user index, torch.Tensor containing [positive item, negative items])
+        """
         user, pos_item = self.checkins[idx]
         neg_items = []
         for _ in range(self.neg_sample_size):
@@ -555,4 +597,10 @@ class TotalTrainDataset(Dataset):
         return torch.tensor([user]), torch.tensor([pos_item] + neg_items)
 
     def __len__(self):
+        """
+        Return the number of training samples.
+
+        Returns:
+            int: Number of samples.
+        """
         return len(self.checkins)

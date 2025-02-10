@@ -2,27 +2,35 @@
 
 import os
 import time
+import random
+
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-import numpy as np
 from tqdm import tqdm
 from colorama import init, Fore, Style
-import random
 
-from src.data.dataset import TrainDataset, TestDataset
-from src.models.mbgcn2 import MF, MBGCN
+from src.data.dataset import TrainDataset, TestDataset, TotalTrainDataset
+from src.models.mbgcn import MF, MBGCN
 from src.utils.metrics import Recall, Precision, NDCG, MRR
 from src.loss import bpr_loss
 
-# colorama 초기화 
 init(autoreset=True)
 
 class TrainManager:
+    """
+    Manager class responsible for handling the training, evaluation, and retraining processes.
+    
+    Args:
+        args (Namespace): Configuration parameters for training.
+    """
     def __init__(self, args):
+        """
+        Initialize the training manager by setting up datasets, dataloaders, model, and optimizer.
+        """
         self.args = args
         self.device = torch.device(args.device)
-        # 데이터셋 로드 (TrainDataset, TestDataset)
         print(Fore.CYAN + Style.BRIGHT + ">>> Loading dataset ...")
         self.train_dataset = TrainDataset(
             data_path=args.data_path,
@@ -35,7 +43,7 @@ class TrainManager:
             data_path=args.data_path,
             dataset_name=args.dataset_name,
             trainset=self.train_dataset,
-            task="train"   # train.txt 파일을 읽어들임
+            task="train"
         )
         self.valid_dataset = TestDataset(
             data_path=args.data_path,
@@ -76,16 +84,19 @@ class TrainManager:
         self.num_users = self.train_dataset.num_users
         self.num_items = self.train_dataset.num_items
 
-        # 모델 선택
         self.model = self._build_model().to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.lr)
         print(Fore.GREEN + Style.BRIGHT + f">>> Model [{args.model}] loaded on {self.device}")
         
     def _build_model(self):
+        """
+        Build and return the model based on the model type specified in the arguments.
+
+        Returns:
+            torch.nn.Module: The model instance (MF or MBGCN) built according to the configuration.
+        """
         if self.args.model == "MF":
-            model = MF(
-                self.args, self.train_dataset, self.device
-            )
+            model = MF(self.args, self.train_dataset, self.device)
         elif self.args.model == 'MBGCN': 
             model = MBGCN(self.args, self.train_dataset, self.device)
         else:
@@ -93,6 +104,16 @@ class TrainManager:
         return model
     
     def _evaluate_loader(self, loader):
+        """
+        Evaluate the model on the provided dataloader by computing recall (and/or ndcg) metrics,
+        while applying a train mask.
+
+        Args:
+            loader (DataLoader): DataLoader instance for evaluation.
+
+        Returns:
+            dict: A dictionary containing computed recall metrics keyed by metric name.
+        """
         self.model.eval()
         k_values = [20, 40, 80]
         recall_metrics = {k: Recall(topk=k) for k in k_values}
@@ -101,96 +122,90 @@ class TrainManager:
         progress = tqdm(loader, desc=Fore.MAGENTA + "Evaluating", ncols=80)
         with torch.no_grad():
             for batch in progress:
-                # batch: (user_idx, ground_truth, train_mask)
-                user_ids = batch[0].to(self.device)                     # (batch_size,)
-                ground_truth = batch[1].to(self.device)                 # (batch_size, num_items)
-                train_mask = batch[2].to(self.device)                   # (batch_size, num_items)
+                user_ids = batch[0].to(self.device)                    
+                ground_truth = batch[1].to(self.device)                 
+                train_mask = batch[2].to(self.device)                  
                 
-                scores = self.model.evaluate(user_ids)                # (batch_size, num_items)
+                scores = self.model.evaluate(user_ids)               
                 scores[train_mask.bool()] = float('-inf')
                 
                 for k in k_values:
-                    # topk_items: (batch_size, k) 예측 인덱스
-                    _, topk_items = torch.topk(scores, k, dim=1)        # (batch_size, k)
-                    # 디버깅: topk_items의 최대 인덱스와 ground_truth shape 출력
+                    _, topk_items = torch.topk(scores, k, dim=1)       
                     max_index = topk_items.max().item()
                     num_items = ground_truth.size(1)
                     if max_index >= num_items:
-                        print(f"DEBUG: max_index in topk_items: {max_index}, num_items: {num_items}")
+                        print(
+                            f"DEBUG: max_index in topk_items: {max_index}, "
+                            f"num_items: {num_items}"
+                        )
                     
-                    # ground_truth.gather(1, topk_items) => (batch_size, k)
-                    # 각 사용자에 대해, topk_items 위치의 값이 1이면 hit
                     hits = (ground_truth.gather(1, topk_items) > 0).any(dim=1).float()
                     recall_metrics[k].update(hits)
-                    
-                    batch_size = user_ids.size(0)
-                    # ndcg_vals = torch.zeros(batch_size, device=self.device)
-                    # # 각 사용자별로 첫 hit의 rank를 계산
-                    # for i in range(batch_size):
-                    #     # ground_truth.gather(1, topk_items[i].unsqueeze(1)) => (k,1), squeeze => (k,)
-                    #     rel = ground_truth[i].gather(0, topk_items[i])
-                    #     nonzero = (rel > 0).nonzero(as_tuple=False)
-                    #     if nonzero.numel() > 0:
-                    #         rank = nonzero[0].item() + 1  # 1-based rank
-                    #         ndcg_vals[i] = 1.0 / np.log2(rank + 1)
-                    # ndcg_metrics[k].update(ndcg_vals)
         metrics = {}
         for k in k_values:
             metrics[f"Recall@{k}"] = recall_metrics[k].compute()
-            # metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
         return metrics
     
     def _evaluate_loader_train(self, loader):
+        """
+        Evaluate the model on the training evaluation dataloader without using a train mask.
+
+        Args:
+            loader (DataLoader): DataLoader instance for training evaluation.
+
+        Returns:
+            dict: A dictionary containing computed recall metrics keyed by metric name.
+        """
         self.model.eval()
         k_values = [20, 40, 80]
         recall_metrics = {k: Recall(topk=k) for k in k_values}
-        ndcg_metrics = {k: NDCG(topk=k) for k in k_values}
         
         progress = tqdm(loader, desc=Fore.MAGENTA + "Evaluating (Train)", ncols=80)
         with torch.no_grad():
             for batch in progress:
-                user_ids = batch[0].to(self.device)                     # (batch_size,)
-                ground_truth = batch[1].to(self.device)                 # (batch_size, num_items)
-                # **여기서는 train_mask를 사용하지 않고 평가**
-                scores = self.model.evaluate(user_ids)                  # (batch_size, num_items)
+                user_ids = batch[0].to(self.device)                     
+                ground_truth = batch[1].to(self.device)                
+                scores = self.model.evaluate(user_ids)                  
                 
                 for k in k_values:
-                    _, topk_items = torch.topk(scores, k, dim=1)        # (batch_size, k)
+                    _, topk_items = torch.topk(scores, k, dim=1)        
                     hits = (ground_truth.gather(1, topk_items) > 0).any(dim=1).float()
                     recall_metrics[k].update(hits)
                     
-                    # batch_size = user_ids.size(0)
-                    # ndcg_vals = torch.zeros(batch_size, device=self.device)
-                    # for i in range(batch_size):
-                    #     rel = ground_truth[i].gather(0, topk_items[i])
-                    #     nonzero = (rel > 0).nonzero(as_tuple=False)
-                    #     if nonzero.numel() > 0:
-                    #         rank = nonzero[0].item() + 1
-                    #         ndcg_vals[i] = 1.0 / np.log2(rank + 1)
-                    # ndcg_metrics[k].update(ndcg_vals)
         metrics = {}
         for k in k_values:
             metrics[f"Recall@{k}"] = recall_metrics[k].compute()
-            # metrics[f"NDCG@{k}"] = ndcg_metrics[k].compute()
         return metrics
     
     def train_epoch(self):
+        """
+        Run one epoch of training on the training dataset and update the model parameters.
+
+        Returns:
+            float: The average loss computed for the epoch.
+        """
         self.model.train()
         total_loss = 0.0
         progress = tqdm(self.train_loader, desc=Fore.YELLOW + "Training", ncols=80)
         for batch in progress:
             self.optimizer.zero_grad()
-            user_ids = batch[0].squeeze().to(self.device).view(-1) # shape: [batch_size]
-            pos_neg = batch[1].to(self.device)  # shape: [batch_size, 2]
+            user_ids = batch[0].squeeze().to(self.device).view(-1) 
+            pos_neg = batch[1].to(self.device)  
             pos_item_ids = pos_neg[:, 0].view(-1, 1)
             neg_item_ids = pos_neg[:, 1].view(-1, 1)
-            # 디버깅: 배치 내 negative 샘플들의 통계 출력
             neg_values = neg_item_ids.cpu().numpy()
             
             pos_scores, pos_L2 = self.model(user_ids, pos_item_ids)
             neg_scores, neg_L2 = self.model(user_ids, neg_item_ids)
             
-            loss = bpr_loss(pos_scores, neg_scores, pos_L2, neg_L2, self.args.train_batch_size, self.args.L2_norm)
+            loss = bpr_loss(
+                pos_scores,
+                neg_scores,
+                pos_L2,
+                neg_L2,
+                self.args.train_batch_size,
+                self.args.L2_norm,
+            )
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
@@ -200,20 +215,36 @@ class TrainManager:
         return avg_loss
     
     def train_total_epoch(self, total_loader):
+        """
+        Execute one epoch of retraining on the total dataset and update the model parameters.
+
+        Args:
+            total_loader (DataLoader): DataLoader instance for the total dataset.
+
+        Returns:
+            float: The average loss computed for the retraining epoch.
+        """
         self.model.train()
         total_loss = 0.0
         progress = tqdm(total_loader, desc=Fore.YELLOW + "Retraining on Total", ncols=80)
         for batch in progress:
             self.optimizer.zero_grad()
-            user_ids = batch[0].squeeze().to(self.device).view(-1)  # shape: [batch_size]
-            pos_neg = batch[1].to(self.device)  # shape: [batch_size, 2] (첫 원소: positive, 두 번째: negative)
+            user_ids = batch[0].squeeze().to(self.device).view(-1)  
+            pos_neg = batch[1].to(self.device)  
             pos_item_ids = pos_neg[:, 0].view(-1, 1)
             neg_item_ids = pos_neg[:, 1].view(-1, 1)
             
             pos_scores, pos_L2 = self.model(user_ids, pos_item_ids)
             neg_scores, neg_L2 = self.model(user_ids, neg_item_ids)
             
-            loss = bpr_loss(pos_scores, neg_scores, pos_L2, neg_L2, self.args.train_batch_size, self.args.L2_norm)
+            loss = bpr_loss(
+                pos_scores,
+                neg_scores,
+                pos_L2,
+                neg_L2,
+                self.args.train_batch_size,
+                self.args.L2_norm,
+            )
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
@@ -222,25 +253,35 @@ class TrainManager:
         return avg_loss
     
     def train(self):
+        """
+        Conduct the full training process including early stopping, retraining, and final evaluation.
+
+        Returns:
+            float: The final test Recall@40 metric after training.
+        """
         best_recall = -float('inf')
         patience_count = 0
         best_state = None
-        best_epoch = 0  # best model이 업데이트된 epoch 번호
+        best_epoch = 0  
 
         print(Fore.CYAN + Style.BRIGHT + ">>> Start training ...")
         for epoch in range(1, self.args.epoch + 1):
             start_time = time.time()
-            train_loss = self.train_epoch() # 학습 데이터셋에서 계산한 train loss
-            # train_metrics = self._evaluate_loader_train(self.train_eval_loader)
-            valid_metrics = self._evaluate_loader(self.valid_loader) # validation 데이터셋 평가
+            train_loss = self.train_epoch() 
+            valid_metrics = self._evaluate_loader(self.valid_loader)
             epoch_time = time.time() - start_time
-            log = (f"{Fore.WHITE}{Style.BRIGHT}Epoch {epoch:03d}/{self.args.epoch:03d} | "
-                   f"{Fore.YELLOW}Train Loss: {train_loss:.6f}\n"
-                   + "\n" + " | ".join([f"{Fore.BLUE}Valid Recall@{k}: {valid_metrics[f'Recall@{k}']:.4f}" for k in [20, 40, 80]])
-                #    + "\n" + " | ".join([f"{Fore.CYAN}Valid NDCG@{k}: {valid_metrics[f'NDCG@{k}']:.4f}" for k in [10, 20, 40]])
-                   + f" | {Fore.MAGENTA}Time: {epoch_time:.2f}s")
+            log = (
+                f"{Fore.WHITE}{Style.BRIGHT}Epoch {epoch:03d}/{self.args.epoch:03d} | "
+                f"{Fore.YELLOW}Train Loss: {train_loss:.6f}\n\n"
+                + " | ".join(
+                    [
+                        f"{Fore.BLUE}Valid Recall@{k}: {valid_metrics[f'Recall@{k}']:.4f}"
+                        for k in [20, 40, 80]
+                    ]
+                )
+                + f" | {Fore.MAGENTA}Time: {epoch_time:.2f}s"
+            )
             print(log)
-            # Early stopping 기준: Recall@40 on validation
             if valid_metrics["Recall@40"] > best_recall:
                 best_recall = valid_metrics["Recall@40"]
                 best_state = {k: v.clone().cpu() for k, v in self.model.state_dict().items()}
@@ -254,14 +295,16 @@ class TrainManager:
         if best_state is not None:
             self.model.load_state_dict(best_state, strict=False)
         
-        # 최종 테스트 평가
         final_test_metrics = self._evaluate_loader(self.test_loader)
         print(Fore.GREEN + Style.BRIGHT + ">>> Final Test Metrics:")
         for k in sorted(final_test_metrics.keys()):
             print(f"{k}: {final_test_metrics[k]:.4f}")
         
-        # TotalTrainDataset을 사용하여 전체 데이터셋으로부터 pos/neg 샘플을 생성
-        from src.data.dataset import TotalTrainDataset  # TotalTrainDataset 클래스를 import
+        print(
+            Fore.CYAN
+            + Style.BRIGHT
+            + f">>> Retraining on total dataset for {best_epoch} epochs ..."
+        )
         total_train_dataset = TotalTrainDataset(
             data_path=self.args.data_path,
             dataset_name=self.args.dataset_name,
@@ -275,25 +318,21 @@ class TrainManager:
             shuffle=True,
             num_workers=4
         )
-        print(Fore.CYAN + Style.BRIGHT + f">>> Retraining on total dataset for {best_epoch} epochs ...")
-        # retraining 단계에서는 기존 best model을 초기값으로 사용하고, best_epoch 만큼 학습합니다.
         for epoch in range(1, best_epoch + 1):
             start_time = time.time()
             train_loss = self.train_total_epoch(total_train_loader)
             epoch_time = time.time() - start_time
-            log = (f"{Fore.WHITE}{Style.BRIGHT}[Retrain] Epoch {epoch:03d}/{best_epoch:03d} | "
-                   f"{Fore.YELLOW}Train Loss: {train_loss:.6f} | {Fore.MAGENTA}Time: {epoch_time:.2f}s")
+            log = (
+                f"{Fore.WHITE}{Style.BRIGHT}[Retrain] Epoch {epoch:03d}/{best_epoch:03d} | "
+                f"{Fore.YELLOW}Train Loss: {train_loss:.6f} | {Fore.MAGENTA}Time: {epoch_time:.2f}s"
+            )
             print(log)
-        # retraining 종료 후 최종 모델 저장 (예: total_model.pth)
+       
         save_path = self.args.save_path
         os.makedirs(save_path, exist_ok=True)
         total_save_dir = os.path.join(save_path, "total_model.pth")
         torch.save(self.model.state_dict(), total_save_dir)
-        print(Fore.GREEN + Style.BRIGHT + f">>> Retrained model saved at {total_save_dir}")
-
-        # 최종 평가 지표(예: Recall@40)를 반환하도록 수정
+        print(
+            Fore.GREEN + Style.BRIGHT + f">>> Retrained model saved at {total_save_dir}"
+        )
         return final_test_metrics["Recall@40"]
-    
-
-        
-        

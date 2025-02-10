@@ -1,12 +1,20 @@
 import os
 import argparse
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 
-# === Base Model (변경 없음) ===
 class ModelBase(nn.Module):
+    """
+    Base model class for collaborative filtering.
+
+    Args:
+        args (argparse.Namespace): Configuration parameters.
+        trainset: Training dataset object containing num_users and num_items.
+        device (torch.device): Device on which the model is run.
+    """
     def __init__(self, args: argparse.Namespace, trainset, device: torch.device):
         super().__init__()
         self.embed_size = args.embedding_size
@@ -16,30 +24,77 @@ class ModelBase(nn.Module):
         self.num_items = trainset.num_items
 
         if args.create_embeddings:
-            self.item_embedding = nn.Parameter(torch.empty(self.num_items, self.embed_size, device=self.device))
+            self.item_embedding = nn.Parameter(
+                torch.empty(self.num_items, self.embed_size, device=self.device)
+            )
             nn.init.xavier_normal_(self.item_embedding)
-            self.user_embedding = nn.Parameter(torch.empty(self.num_users, self.embed_size, device=self.device))
+            self.user_embedding = nn.Parameter(
+                torch.empty(self.num_users, self.embed_size, device=self.device)
+            )
             nn.init.xavier_normal_(self.user_embedding)
         else:
             load_path = os.path.join(args.pretrain_path, 'model.pkl')
             load_data = torch.load(load_path, map_location='cpu')
             if not args.pretrain_frozen:
-                self.item_embedding = nn.Parameter(F.normalize(load_data['item_embedding']).to(self.device))
-                self.user_embedding = nn.Parameter(F.normalize(load_data['user_embedding']).to(self.device))
+                self.item_embedding = nn.Parameter(
+                    F.normalize(load_data['item_embedding']).to(self.device)
+                )
+                self.user_embedding = nn.Parameter(
+                    F.normalize(load_data['user_embedding']).to(self.device)
+                )
             else:
-                self.item_embedding = F.normalize(load_data['item_embedding']).to(self.device)
-                self.user_embedding = F.normalize(load_data['user_embedding']).to(self.device)
+                self.item_embedding = F.normalize(
+                    load_data['item_embedding']).to(self.device)
+                self.user_embedding = F.normalize(
+                    load_data['user_embedding']).to(self.device)
 
     def propagate(self, *args, **kwargs):
+        """
+        Propagate raw embeddings to generate embeddings for prediction.
+
+        Returns:
+            tuple: (user_embedding, item_embedding, item_item_embedding_dict)
+                - user_embedding (torch.Tensor): User embeddings.
+                - item_embedding (torch.Tensor): Item embeddings.
+                - item_item_embedding_dict (dict): Dictionary mapping behavior keys to item-item embeddings.
+        """
         raise NotImplementedError
 
     def predict(self, *args, **kwargs):
+        """
+        Predict scores from the given embeddings.
+
+        Returns:
+            torch.Tensor: Score tensor.
+        """
         raise NotImplementedError
 
     def regularize(self, user_embeddings, item_embeddings):
+        """
+        Compute the L2 regularization term for the given embeddings.
+
+        Args:
+            user_embeddings (torch.Tensor): User embeddings.
+            item_embeddings (torch.Tensor): Item embeddings.
+
+        Returns:
+            torch.Tensor: Regularization loss.
+        """
         return self.L2_norm * ((user_embeddings ** 2).sum() + (item_embeddings ** 2).sum())
 
     def forward(self, users, items):
+        """
+        Compute predictions and L2 regularization loss for given user and item indices.
+
+        Args:
+            users: Tensor of user indices.
+            items: Tensor of item indices (with shape (batch_size, num_items_per_user)).
+
+        Returns:
+            tuple: (scores, L2_loss)
+                - scores (torch.Tensor): Predicted score tensor.
+                - L2_loss (torch.Tensor): L2 regularization loss.
+        """
         user_emb_final, item_emb_final, item_item_emb_dict = self.propagate()
         # user_emb_final: (num_batch, d_total), item_emb_final: (num_items_selected, d_total)
         batch_user_emb = user_emb_final[users].unsqueeze(1).expand(-1, items.shape[1], -1)
@@ -76,21 +131,34 @@ class ModelBase(nn.Module):
         return scores, L2_loss
 
     def evaluate(self, *args, **kwargs):
+        """
+        Evaluate the model on all items for given users.
+
+        Returns:
+            torch.Tensor: Score matrix.
+        """
         raise NotImplementedError
 
 # === MBGCN Model (Multi-layer propagation 적용) ===
 class MBGCN(ModelBase):
+    """
+    MBGCN model with multi-layer propagation.
+
+    Args:
+        args (argparse.Namespace): Configuration parameters.
+        trainset: Training dataset object with graph information.
+        device (torch.device): Device on which the model is run.
+    """
     def __init__(self, args: argparse.Namespace, trainset, device: torch.device):
         super().__init__(args, trainset, device)
-        # 학습 데이터 및 그래프 관련 변수
         self.mgnn_weight = args.mgnn_weight
-        self.relation_dict = trainset.relation_dict      # dict: 각 행동별 사용자-아이템 관계 (sparse tensor)
-        self.item_graph = trainset.item_graph            # dict: 각 행동별 아이템-아이템 그래프 (sparse tensor)
+        self.relation_dict = trainset.relation_dict      
+        self.item_graph = trainset.item_graph            
         self.train_matrix = trainset.train_matrix.to(self.device)
-        self.relation = trainset.relation                # (필요시 사용)
+        self.relation = trainset.relation                
         self.lamb = args.lamb
-        self.item_graph_degree = trainset.item_graph_degree  # dict: 각 행동별 아이템 그래프의 degree
-        self.user_behavior_degree = trainset.user_behavior_degree.to(self.device)  # (num_users, num_behaviors)
+        self.item_graph_degree = trainset.item_graph_degree  
+        self.user_behavior_degree = trainset.user_behavior_degree.to(self.device) 
         self.num_layers = args.num_layers
 
         # 드롭아웃 설정 (각 레이어에 적용)
@@ -142,6 +210,10 @@ class MBGCN(ModelBase):
         self.mgnn_weight = nn.Parameter(torch.tensor(self.mgnn_weight, dtype=torch.float32, device=self.device))
 
     def _to_gpu(self):
+        """
+        Move all sparse tensors (relations, graphs, degrees) to the designated device.
+
+        """
         for key in self.relation_dict:
             self.relation_dict[key] = self.relation_dict[key].to(self.device)
         for key in self.item_graph:
@@ -150,6 +222,12 @@ class MBGCN(ModelBase):
             self.item_graph_degree[key] = self.item_graph_degree[key].to(self.device)
             
     def _compute_user_behavior_weight(self):
+        """
+        Compute normalized user behavior weight matrix.
+
+        Returns:
+            torch.Tensor: User behavior weight matrix with shape (num_users, num_behaviors).
+        """
         # mgnn_weight: (num_behaviors,) → softmax 후 unsqueeze(-1)로 (num_behaviors, 1)
         weight = torch.softmax(self.mgnn_weight, dim=0).unsqueeze(-1)  # (num_behaviors, 1)
         # total_weight: (num_users, 1)
@@ -162,17 +240,26 @@ class MBGCN(ModelBase):
 
     def propagate(self):
         """
-        Multi-layer propagation.
-        각 레이어마다 다음을 수행:
-          1. User-Item propagation: 각 행동 t에 대해, 
-             p_{u,t}^{(l)} = aggregate(아이템 임베딩 I^{(l)}의 이웃, relation_dict[t] 적용, node dropout, message dropout)
-             → 사용자별 가중치(α_{u,t})로 가중합 → 선형변환(W^(l)) 적용하여 U^{(l+1)} 도출.
-          2. Item propagation from user side: (train_matrix를 통해)
-             I_user^{(l+1)} = aggregate(사용자 임베딩 U^{(l)}) → 선형변환(W^(l)) 적용.
-          3. Item-Item propagation: 각 행동 t에 대해,
-             s_{i,t}^{(l+1)} = W_t^(l) * aggregate(아이템 I^{(l)}의 이웃, item_graph[t] 적용)
-          4. 각 레이어마다 dropout 적용.
-        최종적으로, 레이어 0 (초기 임베딩)부터 레이어 L까지의 임베딩을 concat하여 반환.
+        Perform multi-layer propagation.
+
+        For each layer l, the following operations are performed:
+          1. User-Item propagation: For each behavior t, aggregate neighbor item embeddings
+             using the relation matrix with node and message dropout, then weight them using
+             user behavior weights and apply a linear transformation to produce U^{(l+1)}.
+          2. Item propagation from the user side: Using the training matrix, aggregate user embeddings,
+             apply dropout, and then a linear transformation to produce I^{(l+1)}.
+          3. Item-Item propagation: For each behavior t, aggregate neighbor item embeddings from
+             the item graph (with dropout) and apply a behavior-specific linear transformation.
+          4. Update the embeddings for the next layer.
+
+        Finally, the embeddings from layer 0 (initial embeddings) to layer L are concatenated
+        and returned, along with the per-behavior item-item embeddings.
+
+        Returns:
+            tuple: (U_final, I_final, S_final_dict)
+                - U_final (torch.Tensor): Final user embeddings, shape (num_users, d_total).
+                - I_final (torch.Tensor): Final item embeddings, shape (num_items, d_total).
+                - S_final_dict (dict): Dictionary mapping each behavior t to concatenated item-item embeddings.
         """
         eps = 1e-8
         num_behaviors = self.user_behavior_degree.shape[1]
@@ -261,6 +348,15 @@ class MBGCN(ModelBase):
         return U_final, I_final, S_final_dict
 
     def evaluate(self, user):
+        """
+        Evaluate the model for given users across all items.
+
+        Args:
+            user: Tensor of user indices for evaluation.
+
+        Returns:
+            torch.Tensor: Score matrix of shape (num_users_eval, num_items).
+        """
         # 평가 시에는 propagate()를 통해 전체 아이템에 대한 임베딩을 얻고,
         # forward와 유사하게 점수를 계산합니다.
         U_final, I_final, S_final_dict = self.propagate()
@@ -268,7 +364,8 @@ class MBGCN(ModelBase):
         score1 = torch.matmul(user_feature, I_final.t())
         score2 = 0
         for t, s_emb in S_final_dict.items():
-            user_deg = self.user_behavior_degree[:, list(self.relation_dict.keys()).index(t)].unsqueeze(-1).float() + 1e-8
+            idx = list(self.relation_dict.keys()).index(t)
+            user_deg = self.user_behavior_degree[:, idx].unsqueeze(-1).float() + 1e-8
             user_item_agg = torch.sparse.mm(self.relation_dict[t], s_emb) / user_deg
             proj = self.item_behavior_W_score[t]
             user_proj = torch.matmul(user_item_agg, proj)
