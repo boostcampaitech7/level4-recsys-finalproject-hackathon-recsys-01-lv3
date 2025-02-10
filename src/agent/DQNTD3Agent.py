@@ -127,15 +127,18 @@ class HRLAgent:
 
         return int(np.clip(scaled_action, 1, 10000))
     
-    def train_high_policy(self):
+    def train_high_policy(self, cql_alpha=1.0):
         """
-        Train the high-level policy (DQN).
+        Train the high-level policy (DQN) with CQL loss.
 
         This method updates the high-level policy using sampled experiences from the replay buffer.
-        It calculates the Q-value loss and performs a gradient update.
+        It calculates the Q-value loss with a Conservative Q-Learning (CQL) regularization term.
+
+        Args:
+            cql_alpha (float): Weight for the CQL regularization term. Default is 1.0.
 
         Returns:
-            float: The loss value for the high-level policy.
+            float: The total loss value for the high-level policy.
         """
         if self.replay_buffer.size_high() < self.batch_size:
             return None
@@ -154,13 +157,22 @@ class HRLAgent:
 
         current_q_values = self.high_policy(states_tensor).gather(1, actions_tensor.unsqueeze(-1)).squeeze(-1)
 
-        loss = nn.SmoothL1Loss()(current_q_values, target_q_values)
+        q_loss = nn.SmoothL1Loss()(current_q_values, target_q_values)
+
+        all_actions_q_values = self.high_policy(states_tensor)
+        logsumexp_q = torch.logsumexp(all_actions_q_values, dim=1)
+
+        sampled_actions_q = current_q_values
+
+        cql_loss = cql_alpha * (logsumexp_q.mean() - sampled_actions_q.mean())
+
+        total_loss = q_loss + cql_loss
 
         self.high_optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         self.high_optimizer.step()
 
-        return loss.item()
+        return total_loss.item()
 
     def train_low_policy(self, policy_update_delay=2):
         """
