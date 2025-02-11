@@ -1,28 +1,25 @@
 # PROMO - Prescriptive AI for Promotion
-사진  
 
 ## 🗂️ 목차
 - [프로젝트 소개](#프로젝트-소개)
-- [주요 기능](#주요-기능)
 - [팀 소개](#팀-소개)
 - [개발 환경 및 기술 스택](#개발-환경-및-기술-스택)
 - [디렉토리 구조](#디렉토리-구조)
 - [전체 모델 아키텍처](#전체-모델-아키텍처)
-- [유용한 링크](#유용한-링크)
+<br/>
 
-## 🎉 프로젝트 소개
-"PROMO"는 - 입니다. 사용자가 - 할 수 있습니다.
-프로모션 광고 비용을 절감하고 매출을 높일 수 있도록, 프로모션 시 구매 가능성이 높은 유저군을 선별하여 최적 할인율과 유저 수를 동적으로 추천해줍니다.
+## 💡 프로젝트 소개
+"**PROMO**"는 프로모션 광고 비용을 절감하고 매출을 높일 수 있도록, 프로모션 시 구매 가능성이 높은 유저군을 선별하여 최적 할인율과 유저 수를 동적으로 추천해주는 AI 솔루션입니다. 사용자는 원하는 상품 정보를 선택하고, 추천된 할인율과 프로모션 대상 인원을 조정해가면서, 예상 매출과 최적값 대비 차이를 실시간으로 확인할 수 있습니다. 미등록 상품의 경우, 상품 정보를 입력하면 유사 상품 추천을 통해 프로모션 전략을 확인할 수 있습니다.
+<p align="center"><img src="https://github.com/user-attachments/assets/34d0bb78-e59b-4c9a-a198-78439b72fa6d"></p>
+
 ### 프로모션 시 구매 가능성이 높은 유저군을 선별합니다.
--입니다.
+추천시스템 모델 MBGCN을 통해 다양한 이벤트 정보를 활용하여 구매 가능성이 높은 유저군을 선별합니다.
 ### 최적 할인율과 유저수를 동적으로 추천합니다.
--입니다.
+강화 학습 모델 HRL을 통해 추천 모델이 선정한 유저 후보군과 상품 정보를 바탕으로 할인율과 유저수를 최적화합니다.
 ### 광고 비용을 절감하면서 매출을 높일 수 있습니다.
--입니다.
+PROMO를 통해 효과적인 마케팅 전략을 수립하고, 타겟 고객에게 적절한 혜택을 제공하여 구매 전환율을 높일 수 있습니다.
 
-## 💡 주요 기능
-영상  
-간단히 기능 설명
+<br/>
 
 ## 🍚 팀 소개
 네이버 부스트캠프 AI Tech 7기 Level 4 RecSys 1조 **오곡밥** 입니다.  
@@ -34,6 +31,7 @@
 | <img src="https://github.com/user-attachments/assets/a29cbbd9-0cde-495a-bd7e-90f20759f3d1" width="100"/> | <img src="https://github.com/user-attachments/assets/c619ed82-03f3-4d48-9bba-dd60408879f9" width="100"/> | <img src="https://github.com/user-attachments/assets/1b0e54e6-57dc-4c19-97f5-69b7e6f3a9b4" width="100"/> | <img src="https://github.com/user-attachments/assets/67d19373-8cac-4676-bde1-b0637921cf7f" width="100"/> | <img src="https://github.com/user-attachments/assets/f91dd46e-9f1a-42e7-a939-db13692f4098" width="100"/> | <img src="https://github.com/user-attachments/assets/69bbb039-752e-4448-bcaa-b8a65015b778" width="100"/> |
 | [![GitHub Badge](https://img.shields.io/badge/github-181717.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/WonchanMoon)|[![GitHub Badge](https://img.shields.io/badge/github-181717.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/notmandarin)|[![GitHub Badge](https://img.shields.io/badge/github-181717.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/irrso)|[![GitHub Badge](https://img.shields.io/badge/github-181717.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/ojunhyuk99)|[![GitHub Badge](https://img.shields.io/badge/github-181717.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/YoonGeonWook)|[![GitHub Badge](https://img.shields.io/badge/github-181717.svg?style=flat-square&logo=github&logoColor=white)](https://github.com/hw01931)|
 
+<br/>
 
 ## ⚙️ 개발 환경 및 기술 스택
 ### 개발 환경
@@ -49,7 +47,7 @@
 - 강화학습: <img src="https://img.shields.io/badge/Stable--Baselines3-ee4c2c.svg?style=flat-square&logoColor=white"/> <img src="https://img.shields.io/badge/Gymnasium-000000.svg?style=flat-square&logoColor=white"/> <img src="https://img.shields.io/badge/Shimmy-000000.svg?style=flat-square&logoColor=white"/>
 - 웹 스크래핑: <img src="https://img.shields.io/badge/BeautifulSoup4-1668F5.svg?style=flat-square&logoColor=white"/>
 - 개발 도구: <img src="https://img.shields.io/badge/Poetry-60A5FA.svg?style=flat-square&logo=poetry&logoColor=white"/> <img src="https://img.shields.io/badge/Commitizen-000000.svg?style=flat-square&logoColor=white"/>
-
+<br/>
 
 ## 📂 디렉토리 구조
 ```
@@ -125,6 +123,7 @@
 ├── poetry.lock
 └── pyproject.toml
 ```
+<br/>
 
 ## 🏛️ 전체 모델 아키텍처
 ![image](https://github.com/user-attachments/assets/f155a9f6-aaa3-4018-a4ea-34098120d456)
@@ -134,7 +133,3 @@
 
 ### 강화 학습 아키텍처
 ![image](https://github.com/user-attachments/assets/8e05422b-fdf9-4b37-87d3-ab4b08bf28db)
-
-## 🔗 유용한 링크
-- 발표 자료
-- 노션
