@@ -1,0 +1,24 @@
+# 실험 설정 파일
+general:
+  device: "cuda"
+  batch_size: 256
+  gamma: 0.9
+  tau: 0.005
+
+high_policy:
+  learning_rate: 0.0003
+  epsilon_start: 1.0
+  epsilon_min: 0.1
+  epsilon_decay: 0.995
+
+low_policy:
+  learning_rate: 0.0003
+  noise_scale_start: 0.5
+  noise_min: 0.1
+
+replay_buffer:
+  size: 100000
+
+training:
+  policy_update_delay: 2
+  save_path: "/data/ephemeral/home/Hackathon/model_results"
